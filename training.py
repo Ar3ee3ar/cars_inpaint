@@ -13,7 +13,7 @@ from distutils.util import strtobool
 from dataset import Dataset, createAugment
 from partial_conv.generator import dice_coef, InpaintingModel
 from partial_conv.discriminator import Discriminator
-from tools.utils import generate_images, wandb_log, view_test
+from tools.utils import wandb_log, view_test
 from tools.loss import discriminator_loss,generator_loss
 
 # pix2pix
@@ -136,13 +136,49 @@ class train_main:
       tf.summary.image("inpaint img", inpaint_img, step=step//10)
 
 
-  def save_model(self,name):
+  def save_model(self,step):
     # "model.h5" is saved in wandb.run.dir & will be uploaded at the end of training
-    self.model.save(os.path.join(self.logs_path, name))
+    name_g = step+'G_weight.h5'
+    name_d = step+'D_weight.h5'
+    self.generator.save(os.path.join(self.logs_path, name_g))
+    self.discriminator.save(os.path.join(self.logs_path, name_d))
     # model.save('/content/drive/MyDrive/deepimageinpainting/logs/fit/20231008-075026/'+name)
     # Save a model file manually from the current directory:
     if(bool(strtobool(_argparse().wandb))):
-      wandb.save(name)
+      wandb.save(name_g)
+      wandb.save(name_d)
+
+  def generate_images(self):
+    test_input = self.ex_masked_images
+    mask = self.example_masks
+    tar = self.example_sample_labels
+    if(_argparse().model == "pconv"):
+      gen_output = self.generator([test_input,mask], training=True)
+      inpaint_img = [mask * tar[0] + (1 - mask) * gen_output[0]]
+      display_list = [test_input[0], tar[0], gen_output[0],inpaint_img[0][0]]
+    elif(_argparse().model == "p2p"):
+      gen_output = self.generator(test_input, training=True)
+      gen_output_norm = (gen_output[0] * 0.5) + 0.5
+      test_input_norm = (test_input[0] * 0.5) + 0.5
+      tar_norm = (tar[0] * 0.5) + 0.5
+      inpaint_img = [mask * tar_norm + (1 - mask) * gen_output_norm]
+      display_list = [test_input_norm, tar_norm, gen_output_norm,inpaint_img[0][0]]
+    
+    title = ['Input Image', 'Ground Truth', 'Predicted Image', 'Inpaint Image']
+
+    for i in range(4):
+      plt.subplot(1, 4, i+1)
+      plt.title(title[i])
+      # Getting the pixel values in the [0, 1] range to plot.
+      plt.imshow(display_list[i])
+      plt.axis('off')
+    # plt.show()
+    plt.savefig('test_save.png')
+    if(bool(strtobool(_argparse().wandb))):
+      wandb.log({"masked_images": [wandb.Image(display_list[0])]})
+      wandb.log({"predictions": [wandb.Image(display_list[2])]})
+      wandb.log({"inpaint": [wandb.Image(display_list[3])]})
+      wandb.log({"labels": [wandb.Image(display_list[1])]})
 
   def fit(self):
     # for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
@@ -178,7 +214,7 @@ class train_main:
         # print(ex_masked_images)
         # print(ex_masks)
         # print(ex_sample_labels)
-        generate_images(self.generator, ex_masked_images,ex_masks, ex_sample_labels,model_name=_argparse().model,log = bool(strtobool(_argparse().wandb)))
+        self.generate_images()
         print(f"Step: {step//10}k")
         
         
@@ -192,8 +228,9 @@ class train_main:
       # Save (checkpoint) the model every 5k steps
       if (step + 1) % _argparse().save == 0:
         self.checkpoint.save(file_prefix=self.checkpoint_prefix)
-        self.save_model(self.generator,self.logs_path,str(step)+'G_weight.h5')
-        self.save_model(self.discriminator,self.logs_path,str(step)+'D_weight.h5')
+        self.save_model(str(step))
+        # self.save_model(self.generator,self.logs_path,str(step)+'G_weight.h5')
+        # self.save_model(self.discriminator,self.logs_path,str(step)+'D_weight.h5')
 
 
 def main():
