@@ -40,160 +40,160 @@ def _argparse():
     arg = parser.parse_args()
     return arg
 
-# training process
-@tf.function
-def train_step(input_image,mask,target,generator,generator_optimizer,discriminator,discriminator_optimizer, step,summary_writer):
-  with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
-    if(_argparse().model == 'pconv'):
-      gen_output = generator([input_image,mask], training=True)
-      # replace img
-      inpaint_img = mask * target + (1 - mask) * gen_output
-      plt.imshow(inpaint_img[0])
-      plt.savefig('test_save_train.png')
-      inpaint_img = tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
+class train_main:
+  def __init__(self,traingen,generator,generator_optimizer,discriminator,discriminator_optimizer,
+               example_masked_images,example_masks,example_sample_labels,
+               checkpoint,checkpoint_prefix,summary_writer,
+               steps, logs=None):
+    # dataset
+    self.traingen = traingen
+    # model
+    self.generator = generator
+    self.discriminator = discriminator
+    self.generator_optimizer = generator_optimizer
+    self.discriminator_optimizer= discriminator_optimizer
+    # example data
+    self.example_masked_images = example_masked_images
+    self.example_masks = example_masks
+    self.example_sample_labels = example_sample_labels
+    # tensorboard
+    self.checkpoint = checkpoint
+    self.checkpoint_prefix = checkpoint_prefix
+    self.summary_writer = summary_writer
+    # training step
+    self.steps = steps
+    # log path
+    self.logs = logs
 
-      # Discriminator
-      disc_real_output = discriminator(target, training=True)
-      disc_generated_output = discriminator(gen_output, training=True)
-    elif(_argparse().model == 'p2p'):
-      gen_output = generator(input_image, training=True)
-      # normalize to [0,1]
-      input_image = (input_image* 0.5) + 0.5
-      target = (target* 0.5) + 0.5
-      gen_output = (gen_output* 0.5) + 0.5
-      # replace image
-      inpaint_img = mask * target + (1 - mask) * gen_output
-      inpaint_img = tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
-      # plot img
-      display_list = [input_image[0], target[0], gen_output[0], inpaint_img[0]]
-      title = ['Input Image', 'Ground Truth', 'Predicted Image', 'Inpaint Image']
+    self.fit()
 
-      for i in range(4):
-        plt.subplot(1, 4, i+1)
-        plt.title(title[i])
-        # Getting the pixel values in the [0, 1] range to plot.
-        plt.imshow(display_list[i])
-        plt.axis('off')
-      #plt.imshow(inpaint_img[0])
-      plt.savefig('test_save_train.png')
+  # training process
+  @tf.function
+  def train_step(self,input_image,mask,target,step):
+    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
+      if(_argparse().model == 'pconv'):
+        gen_output = self.generator([input_image,mask], training=True)
+        # replace img
+        inpaint_img = mask * target + (1 - mask) * gen_output
+        plt.imshow(inpaint_img[0])
+        plt.savefig('test_save_train.png')
+        inpaint_img = tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
 
-      # Discriminator
-      disc_real_output = discriminator([input_image, target], training=True)
-      disc_generated_output = discriminator([input_image, gen_output], training=True)
+        # Discriminator
+        disc_real_output = self.discriminator(target, training=True)
+        disc_generated_output = self.discriminator(gen_output, training=True)
+      elif(_argparse().model == 'p2p'):
+        gen_output = self.generator(input_image, training=True)
+        # normalize to [0,1]
+        input_image = (input_image* 0.5) + 0.5
+        target = (target* 0.5) + 0.5
+        gen_output = (gen_output* 0.5) + 0.5
+        # replace image
+        inpaint_img = mask * target + (1 - mask) * gen_output
+        inpaint_img = tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
+        # plot img
+        display_list = [input_image[0], target[0], gen_output[0], inpaint_img[0]]
+        title = ['Input Image', 'Ground Truth', 'Predicted Image', 'Inpaint Image']
 
-    gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
-    disc_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target)
+        for i in range(4):
+          plt.subplot(1, 4, i+1)
+          plt.title(title[i])
+          # Getting the pixel values in the [0, 1] range to plot.
+          plt.imshow(display_list[i])
+          plt.axis('off')
+        #plt.imshow(inpaint_img[0])
+        plt.savefig('test_save_train.png')
 
+        # Discriminator
+        disc_real_output = self.discriminator([input_image, target], training=True)
+        disc_generated_output = self.discriminator([input_image, gen_output], training=True)
 
-  generator_gradients = gen_tape.gradient(gen_total_loss,
-                                          generator.trainable_variables)
-  discriminator_gradients = disc_tape.gradient(disc_loss,
-                                               discriminator.trainable_variables)
-
-  generator_optimizer.apply_gradients(zip(generator_gradients,
-                                          generator.trainable_variables))
-  discriminator_optimizer.apply_gradients(zip(discriminator_gradients,
-                                              discriminator.trainable_variables))
-
-  with summary_writer.as_default():
-    tf.summary.scalar('gen_total_loss', gen_total_loss, step=step//10)
-    tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step//10)
-    tf.summary.scalar('l1_hole_loss', hole_loss, step=step//10)
-    tf.summary.scalar('l1_valid_loss', valid_loss, step=step//10)
-    tf.summary.scalar('disc_loss', disc_loss, step=step//10)
-    tf.summary.scalar('perc_loss', perc_loss, step=step//10)
-    tf.summary.scalar('style_loss', style_loss, step=step//10)
-    tf.summary.scalar('total_variation_loss', tv_loss, step=step//10)
-    tf.summary.image("input img", input_image, step=step//10)
-    tf.summary.image("predict img", gen_output, step=step//10)
-    tf.summary.image("inpaint img", inpaint_img, step=step//10)
-
-
-def save_model(model,logs_path,name):
-  # "model.h5" is saved in wandb.run.dir & will be uploaded at the end of training
-  model.save(os.path.join(logs_path, name))
-  # model.save('/content/drive/MyDrive/deepimageinpainting/logs/fit/20231008-075026/'+name)
-  # Save a model file manually from the current directory:
-  if(bool(strtobool(_argparse().wandb))):
-     wandb.save(name)
-
-def fit(traingen,generator,discriminator, steps, logs=None):
-  # define optimizer
-  generator_optimizer = tf.keras.optimizers.Adam(_argparse().lrG, beta_1=0.5)
-  discriminator_optimizer = tf.keras.optimizers.Adam(_argparse().lrD, beta_1=0.5)
-
-  # define checkpoint
-  log_dir= _argparse().dir + "logs/"
-  time_now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
-  summary_writer = tf.summary.create_file_writer(log_dir + "fit/" + time_now)
-
-  checkpoint_dir = log_dir + "fit/" + time_now +'/training_checkpoints'
-  checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
-  checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
-                                  discriminator_optimizer=discriminator_optimizer,
-                                  generator=generator,
-                                  discriminator=discriminator)
-  
-  if(bool(strtobool(_argparse().wandb))):
-     logs_path = logs
-  else:
-     logs_path = checkpoint_dir
-  
-  [example_masked_images, example_masks], example_sample_labels = traingen[54]
-  example_masked_images = example_masked_images.astype('float32')
-  example_masks = example_masks.astype('float32')
-  example_sample_labels = example_sample_labels.astype('float32')
-  start = time.time()
-
-  # for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
-  for step in range(steps):
-    for i in range(len(traingen)):
-      [masked_images, masks], sample_labels = traingen[i]
-      input_image = masked_images.astype('float32')
-      mask = masks.astype('float32')
-      target = sample_labels.astype('float32')
-      if(_argparse().model == 'p2p'):
-        input_image = (input_image - 0.5)/0.5
-        target = (target - 0.5)/0.5
-      # for input_image, mask,target in zip(masked_images, masks, sample_labels):
-        # input_image = tf.expand_dims(input_image, axis=0)
-        # mask = tf.expand_dims(mask, axis=0)
-        # target = tf.expand_dims(target, axis=0)
-        # print(input_image.shape)
-    if (step) % 10 == 0:
-      # display.clear_output(wait=True)
-
-      if step != 0:
-        print(f'Time taken for 10 steps: {time.time()-start:.2f} sec\n')
-
-      start = time.time()
-
-      ex_masked_images = tf.expand_dims(example_masked_images[0], axis=0)
-      ex_masks = tf.expand_dims(example_masks[0], axis=0)
-      ex_sample_labels = tf.expand_dims(example_sample_labels[0], axis=0)
-      if(_argparse().model == 'p2p'):
-        ex_masked_images = (ex_masked_images - 0.5)/0.5
-        ex_sample_labels = (ex_sample_labels - 0.5)/0.5
-      # print(ex_masked_images)
-      # print(ex_masks)
-      # print(ex_sample_labels)
-      generate_images(generator, ex_masked_images,ex_masks, ex_sample_labels,model_name=_argparse().model,log = bool(strtobool(_argparse().wandb)))
-      print(f"Step: {step//10}k")
-      
-      
-    train_step(input_image,mask,target,generator,generator_optimizer,discriminator,discriminator_optimizer, step,summary_writer)
-
-    # Training step
-    if (step+1) % 10 == 0:
-      print('.', end='', flush=True)
+      gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
+      disc_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target)
 
 
-    # Save (checkpoint) the model every 5k steps
-    if (step + 1) % _argparse().save == 0:
-      checkpoint.save(file_prefix=checkpoint_prefix)
-      save_model(generator,logs_path,str(step)+'G_weight.h5')
-      save_model(discriminator,logs_path,str(step)+'D_weight.h5')
+    generator_gradients = gen_tape.gradient(gen_total_loss,
+                                            self.generator.trainable_variables)
+    discriminator_gradients = disc_tape.gradient(disc_loss,
+                                                self.discriminator.trainable_variables)
+
+    self.generator_optimizer.apply_gradients(zip(generator_gradients,
+                                            self.generator.trainable_variables))
+    self.discriminator_optimizer.apply_gradients(zip(discriminator_gradients,
+                                                self.discriminator.trainable_variables))
+
+    with self.summary_writer.as_default():
+      tf.summary.scalar('gen_total_loss', gen_total_loss, step=step//10)
+      tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step//10)
+      tf.summary.scalar('l1_hole_loss', hole_loss, step=step//10)
+      tf.summary.scalar('l1_valid_loss', valid_loss, step=step//10)
+      tf.summary.scalar('disc_loss', disc_loss, step=step//10)
+      tf.summary.scalar('perc_loss', perc_loss, step=step//10)
+      tf.summary.scalar('style_loss', style_loss, step=step//10)
+      tf.summary.scalar('total_variation_loss', tv_loss, step=step//10)
+      tf.summary.image("input img", input_image, step=step//10)
+      tf.summary.image("predict img", gen_output, step=step//10)
+      tf.summary.image("inpaint img", inpaint_img, step=step//10)
+
+
+  def save_model(self,name):
+    # "model.h5" is saved in wandb.run.dir & will be uploaded at the end of training
+    self.model.save(os.path.join(self.logs_path, name))
+    # model.save('/content/drive/MyDrive/deepimageinpainting/logs/fit/20231008-075026/'+name)
+    # Save a model file manually from the current directory:
+    if(bool(strtobool(_argparse().wandb))):
+      wandb.save(name)
+
+  def fit(self):
+    # for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
+    start = time.time()
+    for step in range(self.steps):
+      for i in range(len(self.traingen)):
+        [masked_images, masks], sample_labels = self.traingen[i]
+        input_image = masked_images.astype('float32')
+        mask = masks.astype('float32')
+        target = sample_labels.astype('float32')
+        if(_argparse().model == 'p2p'):
+          input_image = (input_image - 0.5)/0.5
+          target = (target - 0.5)/0.5
+        # for input_image, mask,target in zip(masked_images, masks, sample_labels):
+          # input_image = tf.expand_dims(input_image, axis=0)
+          # mask = tf.expand_dims(mask, axis=0)
+          # target = tf.expand_dims(target, axis=0)
+          # print(input_image.shape)
+      if (step) % 10 == 0:
+        # display.clear_output(wait=True)
+
+        if step != 0:
+          print(f'Time taken for 10 steps: {time.time()-start:.2f} sec\n')
+
+        start = time.time()
+
+        ex_masked_images = tf.expand_dims(self.example_masked_images[0], axis=0)
+        ex_masks = tf.expand_dims(self.example_masks[0], axis=0)
+        ex_sample_labels = tf.expand_dims(self.example_sample_labels[0], axis=0)
+        if(_argparse().model == 'p2p'):
+          ex_masked_images = (ex_masked_images - 0.5)/0.5
+          ex_sample_labels = (ex_sample_labels - 0.5)/0.5
+        # print(ex_masked_images)
+        # print(ex_masks)
+        # print(ex_sample_labels)
+        generate_images(self.generator, ex_masked_images,ex_masks, ex_sample_labels,model_name=_argparse().model,log = bool(strtobool(_argparse().wandb)))
+        print(f"Step: {step//10}k")
+        
+        
+      self.train_step(input_image,mask,target, step)
+
+      # Training step
+      if (step+1) % 10 == 0:
+        print('.', end='', flush=True)
+
+
+      # Save (checkpoint) the model every 5k steps
+      if (step + 1) % _argparse().save == 0:
+        self.checkpoint.save(file_prefix=self.checkpoint_prefix)
+        self.save_model(self.generator,self.logs_path,str(step)+'G_weight.h5')
+        self.save_model(self.discriminator,self.logs_path,str(step)+'D_weight.h5')
 
 
 def main():
@@ -204,10 +204,10 @@ def main():
     # print(_argparse().save)
     main_dir = _argparse().dir
     batch_size = _argparse().batch_size
-    print(bool(strtobool(_argparse().wandb)))
+    # print(bool(strtobool(_argparse().wandb)))
     if(bool(strtobool(_argparse().wandb))):
-       log_path = wandb_log()
-       print(log_path)
+      log_path = wandb_log()
+      # print(log_path)
 
     # main_dir = ''
     # list of training dataset
@@ -270,11 +270,45 @@ def main():
 
     if(_argparse().weightD != ''):
       discriminator.load_weights(_argparse().weightD) # 500
+
+    # define optimizer
+    generator_optimizer = tf.keras.optimizers.Adam(_argparse().lrG, beta_1=0.5)
+    discriminator_optimizer = tf.keras.optimizers.Adam(_argparse().lrD, beta_1=0.5)
+
+    # define checkpoint
+    log_dir= _argparse().dir + "logs/"
+    time_now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    summary_writer = tf.summary.create_file_writer(log_dir + "fit/" + time_now)
+
+    checkpoint_dir = log_dir + "fit/" + time_now +'/training_checkpoints'
+    checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+    checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
+                                    discriminator_optimizer=discriminator_optimizer,
+                                    generator=generator,
+                                    discriminator=discriminator)
+    
+    # if(bool(strtobool(_argparse().wandb))):
+    #   logs_path = logs_path
+    # else:
+    #   logs_path = checkpoint_dir
+    
+    [example_masked_images, example_masks], example_sample_labels = traingen[54]
+    example_masked_images = example_masked_images.astype('float32')
+    example_masks = example_masks.astype('float32')
+    example_sample_labels = example_sample_labels.astype('float32')
         
     if(bool(strtobool(_argparse().wandb))):
-      fit(traingen,generator,discriminator, steps=_argparse().step, logs= log_path)
+      train_main(traingen,generator,generator_optimizer,discriminator,discriminator_optimizer,
+                   example_masked_images,example_masks,example_sample_labels,
+                   checkpoint,checkpoint_prefix,summary_writer,logs= log_path,
+                   steps=_argparse().step,
+                   )
     else:
-      fit(traingen,generator,discriminator, steps=_argparse().step)
+      train_main(traingen,generator,generator_optimizer,discriminator,discriminator_optimizer,
+                   example_masked_images,example_masks,example_sample_labels,
+                   checkpoint,checkpoint_prefix,summary_writer,logs= checkpoint_dir,
+                   steps=_argparse().step)
     
 if __name__ == '__main__':
     main()
