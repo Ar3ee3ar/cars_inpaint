@@ -1,0 +1,19 @@
+car_ds/
+logs/
+venv/
+wandb/
+weight/
+*/_pycache__
+
+# test file
+test.py
+test_gen.py
+test_loss.py
+test_img/
+
+# tensorboard file
+view_progress.py
+logs/
+
+# dataset
+car_ds/
