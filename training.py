@@ -140,8 +140,8 @@ class train_main:
     # "model.h5" is saved in wandb.run.dir & will be uploaded at the end of training
     name_g = step+'G_weight.h5'
     name_d = step+'D_weight.h5'
-    self.generator.save(os.path.join(self.logs_path, name_g))
-    self.discriminator.save(os.path.join(self.logs_path, name_d))
+    self.generator.save(os.path.join(self.logs, name_g))
+    self.discriminator.save(os.path.join(self.logs, name_d))
     # model.save('/content/drive/MyDrive/deepimageinpainting/logs/fit/20231008-075026/'+name)
     # Save a model file manually from the current directory:
     if(bool(strtobool(_argparse().wandb))):
@@ -149,7 +149,7 @@ class train_main:
       wandb.save(name_d)
 
   def generate_images(self):
-    test_input = self.ex_masked_images
+    test_input = self.example_masked_images
     mask = self.example_masks
     tar = self.example_sample_labels
     if(_argparse().model == "pconv"):
