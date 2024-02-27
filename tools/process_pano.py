@@ -1,3 +1,5 @@
+# from https://github.com/timy90022/Perspective-and-Equirectangular/tree/master
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -138,9 +140,119 @@ class Equirectangular:
         
         return persp , mask
     
+class MultiPerspective:
+    def __init__(self, img_array , F_T_P_array ):
+        
+        assert len(img_array)==len(F_T_P_array)
+        
+        self.img_array = img_array
+        self.F_T_P_array = F_T_P_array
+    
+
+    def GetEquirec(self,height,width):
+        #
+        # THETA is left/right angle, PHI is up/down angle, both in degree
+        #
+        merge_image = np.zeros((height,width,3))
+        merge_mask = np.zeros((height,width,3))
+
+        for img_dir,[F,T,P] in zip (self.img_array,self.F_T_P_array):
+            equ = Equirectangular(img_dir,F,T,P)        # Load equirectangular image
+            img , mask = equ.GetEquirec(height,width)   # Specify parameters(FOV, theta, phi, height, width)
+            merge_image += img
+            merge_mask +=mask
+        merge_mask = np.where(merge_mask==0,1,merge_mask)
+        merge_image = (np.divide(merge_image,merge_mask))
+        # print(merge_image.shape)
+        # plt.imshow(merge_image)
+        # plt.show()
+        # plt.imshow(merge_mask)
+        # plt.show()
+        
+        return merge_image
+    
+def panorama2cube(image, cube_size = 1000):
+
+    # cube_size = 1000
+
+    # if not os.path.exists(output_dir):
+    #     os.mkdir(output_dir)
+
+    # all_image = sorted(glob.glob(input_dir + '/*.*'))
+
+    # print(all_image)
+
+
+    # for index in range(len(all_image)):
+    # image = '../Opensfm/source/library/test-1/frame{:d}.png'.format(i)
+    # Equirectangular(predict_image_norm,167, 0, -90)  
+    equ = Perspective(image)    # Load equirectangular image
+    #
+    # FOV unit is degree
+    # theta is z-axis angle(right direction is positive, left direction is negative)
+    # phi is y-axis angle(up direction positive, down direction negative)
+    # height and width is output image dimension
+    #
+
+    # out_dir = output_dir + '/%02d/'%(index)
+    # if not os.path.exists(out_dir):
+    #     os.mkdir(out_dir)
+
+    f_img = equ.GetPerspective(90, 0, 0, cube_size, cube_size)  # Specify parameters(FOV, theta, phi, height, width)
+    # output1 = out_dir +  'front.png'
+    # cv2.imwrite(output1, img)
+
+    r_img = equ.GetPerspective(90, 90, 0, cube_size, cube_size)  # Specify parameters(FOV, theta, phi, height, width)
+    # output2 = out_dir + 'right.png' 
+    # cv2.imwrite(output2, img)
+
+
+    back_img = equ.GetPerspective(90, 180, 0, cube_size, cube_size)  # Specify parameters(FOV, theta, phi, height, width)
+    # output3 = out_dir + 'back.png' 
+    # cv2.imwrite(output3, img)
+
+    l_img = equ.GetPerspective(90, 270, 0, cube_size, cube_size)  # Specify parameters(FOV, theta, phi, height, width)
+    # output4 = out_dir + 'left.png' 
+    # cv2.imwrite(output4, img)
+
+    t_img = equ.GetPerspective(90, 0, 90, cube_size, cube_size)  # Specify parameters(FOV, theta, phi, height, width)
+    # output5 = out_dir + 'top.png' 
+    # cv2.imwrite(output5, img)
+
+    bot_img = equ.GetPerspective(90, 0, -90, cube_size, cube_size)  # Specify parameters(FOV, theta, phi, height, width)
+    # output6 = out_dir + 'bottom.png' 
+    # cv2.imwrite(output6, img)
+    return [f_img, r_img, back_img, l_img, t_img, bot_img]
+
+def cube2panorama(image_list,width,height):
+
+    # width = 1920
+    # height = 960
+
+    # if not os.path.exists(output_dir):
+    #     os.mkdir(output_dir)
+    
+    front = image_list[0]
+    right = image_list[1]
+    back = image_list[2]
+    left = image_list[3]
+    top = image_list[4]
+    bottom = image_list[5]
+
+    # this can turn cube to panorama
+    per = MultiPerspective([front,right,back,left,top,bottom],
+                            [[90, 0, 0],[90, 90, 0],[90, 180, 0],
+                            [90, 270, 0],[90, 0, 90],[90, 0, -90]])    
+    
+    
+    img = per.GetEquirec(height,width)  
+    return img
+    
 def inpaint_pano(inpaint_pano_img,mask_pano_img,car_pano_img):
     inpaint_pano_img = inpaint_pano_img/255.0
     mask_pano_img = mask_pano_img/255.0
     car_pano_img = car_pano_img/255.0
     inpaint_fill_pano = ((mask_pano_img) * inpaint_pano_img) + ((1-mask_pano_img) * car_pano_img)
     return inpaint_fill_pano
+
+# def inpaint_random(inpaint_pano_img,mask,car_pano_img):

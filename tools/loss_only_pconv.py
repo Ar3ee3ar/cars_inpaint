@@ -105,6 +105,7 @@ class StyleContentModel(tf.keras.models.Model):
 
 def style_content_loss(gen_img,real_img):
     # variable -------------------
+    style_weight=120
     # content_weight=1e4
     content_layers = ['block5_conv2']
 
@@ -129,7 +130,7 @@ def style_content_loss(gen_img,real_img):
                            for name in style_outputs.keys()]) #L1
     # style_loss = tf.add_n([tf.reduce_mean((style_outputs[name]-style_targets[name])**2) 
     #                        for name in style_outputs.keys()]) #MSE
-    style_loss = style_loss / num_style_layers
+    style_loss *= style_weight / num_style_layers
     loss = style_loss
 
     # content_loss = tf.add_n([tf.reduce_mean((content_outputs[name]-content_targets[name])**2) 
@@ -152,23 +153,11 @@ def total_variation_loss(image):
 # --------------------------------------------------------------------------
 
 
-def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inpaint_img,mask, target, loss_type = 'pconv', exclude_loss = []):
+def pconv_loss(predict_img, inpaint_img,mask, target):
   LAMBDA_perc = 0.05
   LAMBDA_tv = 0.1
   LAMBDA_hole = 6
   LAMBDA_valid = 1
-  LAMBDA_style =120
-
-  if 'perc' in exclude_loss:
-     LAMBDA_perc = 0
-  if 'tv' in exclude_loss:
-     LAMBDA_tv = 0
-  if 'style' in exclude_loss:
-     LAMBDA_style = 0
-  if 'valid' in exclude_loss:
-     LAMBDA_valid = 0
-  if 'hole' in exclude_loss:
-     LAMBDA_hole = 0
 
   # perceptual
   ## p(inpaint) + p(out)
@@ -177,11 +166,10 @@ def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inp
   ## s(inpaint) + s(out)
 
   # LAMBDA = 100
-  loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-  real_loss = loss_object(tf.ones_like(disc_real_output), disc_real_output) # adversarial loss
+#   loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+#   real_loss = loss_object(tf.ones_like(disc_real_output), disc_real_output) # adversarial loss
 
-  generated_loss = loss_object(tf.zeros_like(disc_generated_output), disc_generated_output) # adversarial loss
-  adv_loss = real_loss + generated_loss
+#   generated_loss = loss_object(tf.zeros_like(disc_generated_output), disc_generated_output) # adversarial loss
 
 
   # perceptual loss -----------------------------------------
@@ -203,7 +191,7 @@ def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inp
   # style_content loss --------------------------------
   style_loss_out = style_content_loss(out_img,real_img)
   style_loss_comp = style_content_loss(comp_img,real_img)
-  style_loss = LAMBDA_style * (style_loss_out + style_loss_comp)
+  style_loss = style_loss_out + style_loss_comp
   # print(style_loss)
   # ----------------------------------------------------
   # total variation loss-------------------------------
@@ -216,12 +204,6 @@ def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inp
   loss_hole = LAMBDA_hole * l1_loss_hole
   loss_valid = LAMBDA_valid * l1_loss_valid
   # ------------------------------------------------------------------
-  if(loss_type == 'pconv'):
-    total_disc_loss = adv_loss + perc_loss + style_loss + tv_loss + loss_hole + loss_valid
-
-    return total_disc_loss,adv_loss, perc_loss, style_loss, tv_loss, loss_hole, loss_valid
-  elif(loss_type == 'p2p'):
-    total_disc_loss = real_loss + generated_loss
-    return total_disc_loss
-  else:
-     return "wrong type"
+  total_disc_loss = perc_loss + style_loss + tv_loss + loss_hole + loss_valid
+  
+  return total_disc_loss, perc_loss, style_loss, tv_loss, loss_hole, loss_valid

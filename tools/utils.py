@@ -5,6 +5,8 @@ from os.path import join, dirname
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
+from PIL import Image
+from tqdm import tqdm
 
 def generate_images(model, test_input,mask, tar,model_name, log=True):
   if(model_name == "pconv"):
@@ -63,7 +65,7 @@ def wandb_log():
   wandb.login(key=os.environ.get('WANDB_KEYS'))
   # initial wandb log
   wandb.tensorboard.patch(root_logdir="")
-  wandb.init(entity='arzeezar-l', project="img_inpaint")
+  wandb.init(entity='arzeezar-l', project="img_inpaint", sync_tensorboard=True)
   return wandb.run.dir
 
 @tf.function
@@ -81,27 +83,37 @@ def view_test(testgen,generator,model_name,batch_size):
   [masked_images, masks], sample_labels = testgen[sample_idx]
 
   fig, axs = plt.subplots(nrows=rows, ncols=4, gridspec_kw = {'wspace':0, 'hspace':0}, figsize=(15,15))
-  if(model_name == "pconv"):
-      inputs = [masked_images, masks]
-      impainted_image = generator.predict(inputs)
-  elif(model_name == "p2p"):
+  inputs = masked_images
+  # if(model_name == "pconv"):
+    # inputs = [masked_images, masks]
+    # impainted_image = generator.predict(inputs)
+  if(model_name == "p2p"):
     masked_images = (masked_images - 0.5)/0.5 # normalize [-1,1]
-    inputs = masked_images
-    impainted_image = generator(inputs, training=True)
-    impainted_image = (impainted_image* 0.5) + 0.5 # de-normalize [0,1]
-    masked_images = (masked_images* 0.5) + 0.5 # de-normalize [0,1]
+    # inputs = masked_images
+    # impainted_image = generator(inputs, training=True)
+    # impainted_image = (impainted_image* 0.5) + 0.5 # de-normalize [0,1]
+    # masked_images = (masked_images* 0.5) + 0.5 # de-normalize [0,1]
 
   # print(impainted_image.shape)
 
   for i in range(rows):
-    axs[i][0].imshow(masked_images[i])
-    # axs[i][1].imshow(masks[i])
-    # get_masked_image = impainted_image[0].copy()
-    # get_masked_image[masks[i]>0] = 1
-    # r,c,ch = np.where(get_masked_image==1)
-    # get_masked_image[(r,c)] = masked_images[i][(r,c)]
-    get_masked_image = masks[i] * sample_labels[i] + (1 - masks[i]) * impainted_image[i]
-    axs[i][1].imshow(impainted_image[i])
+    in_expand = tf.expand_dims(inputs[i], axis=0)
+    if(model_name == "p2p"):
+      impainted_image = generator(in_expand, training=True)
+      impainted_image = (impainted_image* 0.5) + 0.5 # de-normalize [0,1]
+      masked_images = (inputs[i]* 0.5) + 0.5 # de-normalize [0,1]
+    elif(model_name == "pconv"):
+      mask_expand = tf.expand_dims(masks[i], axis=0)
+      # print(in_expand.shape)
+      # print(mask_expand.shape)
+      # print(([in_expand, mask_expand]).shape)
+      impainted_image = generator([in_expand, mask_expand], training=True)
+      masked_images = inputs[i]
+
+
+    axs[i][0].imshow(masked_images)
+    get_masked_image = masks[i] * sample_labels[i] + (1 - masks[i]) * impainted_image[0]
+    axs[i][1].imshow(impainted_image[0])
     axs[i][2].imshow(get_masked_image)
     axs[i][3].imshow(sample_labels[i])
 
@@ -109,6 +121,59 @@ def view_test(testgen,generator,model_name,batch_size):
     ax.axison = False
 
   plt.show()
+
+
+def save_test(testgen,generator,model_name,batch_size,save_path,keep_mask=False):
+  # new perceptual
+  ## Legend: Original Image | Mask generated | Inpainted Image | Ground Truth
+
+  ## Examples
+  # if(batch_size == 1):
+  #   rows = batch_size + 1
+  # else:
+  #   rows = batch_size
+  # print(rows)
+  for sample_idx in tqdm(range(len(testgen))):
+    # sample_idx = 25
+    [masked_images, masks], sample_labels = testgen[sample_idx]
+
+    # fig, axs = plt.subplots(nrows=rows, ncols=4, gridspec_kw = {'wspace':0, 'hspace':0}, figsize=(15,15))
+    if(model_name == "pconv"):
+      inputs = [masked_images, masks]
+      impainted_image = generator.predict(inputs)
+    elif(model_name == "p2p"):
+      masked_images = (masked_images - 0.5)/0.5 # normalize [-1,1]
+      inputs = masked_images
+      # impainted_image = generator(inputs, training=True)
+      # impainted_image = (impainted_image* 0.5) + 0.5 # de-normalize [0,1]
+      # masked_images = (masked_images* 0.5) + 0.5 # de-normalize [0,1]
+
+    # print(impainted_image.shape)
+
+    for i in range(batch_size):
+      in_expand = tf.expand_dims(inputs[i], axis=0)
+      if(model_name == "p2p"):
+        impainted_image = generator(in_expand, training=True)
+        impainted_image = (impainted_image* 0.5) + 0.5 # de-normalize [0,1]
+        masked_images = (inputs[i]* 0.5) + 0.5 # de-normalize [0,1]
+      elif(model_name == "pconv"):
+        mask_expand = tf.expand_dims(masks[i], axis=0)
+        impainted_image = generator([in_expand, mask_expand], training=True)
+        
+      # axs[i][0].imshow(masked_images)
+      if(keep_mask):
+        masked_images_im = Image.fromarray(((masked_images.numpy())*255.0).astype(np.uint8))
+        masked_images_im.save(save_path+str(sample_idx)+str(i)+"_mask.jpeg")
+      get_masked_image = masks[i] * sample_labels[i] + (1 - masks[i]) * impainted_image[0]
+      # axs[i][1].imshow(impainted_image[0])
+      impainted_image_im = Image.fromarray(((impainted_image[0].numpy())*255.0).astype(np.uint8))
+      impainted_image_im.save(save_path+str(sample_idx)+str(i)+"_full_inpaint.jpeg")
+      # axs[i][2].imshow(get_masked_image)
+      get_masked_image_im = Image.fromarray(((get_masked_image.numpy())*255.0).astype(np.uint8))
+      get_masked_image_im.save(save_path+str(sample_idx)+str(i)+"_partial_inpaint.jpeg")
+      # axs[i][3].imshow(sample_labels[i])
+      sample_labels_im = Image.fromarray(((sample_labels[i].numpy())*255.0).astype(np.uint8))
+      sample_labels_im.save(save_path+str(sample_idx)+str(i)+"_gt.jpeg")
 
 
 
