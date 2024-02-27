@@ -1,0 +1,3 @@
+[submodule "partial_conv/partial_convolution_keras"]
+	path = partial_conv/partial_convolution_keras
+	url = https://github.com/MathiasGruber/PConv-Keras
