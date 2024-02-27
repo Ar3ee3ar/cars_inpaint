@@ -1,3 +1,6 @@
 [submodule "partial_conv/partial_convolution_keras"]
 	path = partial_conv/partial_convolution_keras
 	url = https://github.com/MathiasGruber/PConv-Keras
+[submodule "partial_conv/deepimageinpainting"]
+	path = partial_conv/deepimageinpainting
+	url = https://github.com/ayulockin/deepimageinpainting/tree/master
