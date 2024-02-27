@@ -9,16 +9,19 @@ import time
 import wandb
 import matplotlib.pyplot as plt
 from distutils.util import strtobool
+from tqdm import tqdm
 
 from dataset import Dataset, createAugment
-from partial_conv.generator import dice_coef, InpaintingModel
-from partial_conv.discriminator import Discriminator
+from partial_conv.generator import InpaintingModel
+# from partial_conv.generator import dice_coef, InpaintingModel
+# from partial_conv.discriminator import Discriminator
 from tools.utils import wandb_log, view_test
 from tools.loss import discriminator_loss,generator_loss
 
 # pix2pix
 import pix2pix.Generator as p2pG
 import pix2pix.Discriminator as p2pD
+#import pix2pix.Discriminator_con as p2pD_con
 
 tf.config.run_functions_eagerly(True)
 
@@ -27,6 +30,7 @@ def _argparse():
     # print('parsing args...')
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", "-main_dir",type=str, default='', help="parent directory that store dataset")
+    parser.add_argument("--config_file", "-config_file_name",type=str, default='', help="train test config data's file name")
     parser.add_argument("--model", "-model_name",type=str, default='', help="model name: pconv|p2p")
     parser.add_argument("--wandb", "-enable_wandb", type=str, nargs='?', const='True', default="False", help="enable wandb log")
     parser.add_argument("--weightG", "-model_weight_g",type=str, default='', help="path to generator model weight")
@@ -37,6 +41,10 @@ def _argparse():
     parser.add_argument("--lrD", "-lr_D",type=float, default=0.0002, help="learning rate of discriminator")
     parser.add_argument("--img_size", "-img_size",type=int, default=128, help="training image size")
     parser.add_argument("--batch_size", "-batch_size",type=int, default=1, help="training image batch size")
+    parser.add_argument("--bn", "-batch_norm", type=str, nargs='?', const='True', default="False", help="enable batch normalize")
+    parser.add_argument("--random_mask", type=str, nargs='?', const='True', default="False", help="enable random mask")
+    parser.add_argument("--loss_type", "-loss_type",type=str, default='pconv', help="model name: pconv|p2p")
+    parser.add_argument('--exclude_loss', '-loss-list', nargs='+', default=[], help = "perc | style | tv | valid | hole")
     arg = parser.parse_args()
     return arg
 
@@ -64,6 +72,11 @@ class train_main:
     self.steps = steps
     # log path
     self.logs = logs
+    # plot count (for loss graph)
+    self.plot_count = 0
+    # best loss for saving model
+    self.best_gan_loss = 99999
+    self.model_gan_loss = 0
 
     self.fit()
 
@@ -74,14 +87,20 @@ class train_main:
       if(_argparse().model == 'pconv'):
         gen_output = self.generator([input_image,mask], training=True)
         # replace img
-        inpaint_img = mask * target + (1 - mask) * gen_output
-        plt.imshow(inpaint_img[0])
-        plt.savefig('test_save_train.png')
+        inpaint_img = mask * input_image + (1 - mask) * gen_output
+        # plt.imshow(inpaint_img[0])
+        # plt.savefig('test_save_train.png')
         inpaint_img = tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
 
         # Discriminator
-        disc_real_output = self.discriminator(target, training=True)
-        disc_generated_output = self.discriminator(gen_output, training=True)
+        # disc_real_output = self.discriminator(target, training=True)
+        # disc_generated_output = self.discriminator(gen_output, training=True)
+        # old
+        disc_real_output = self.discriminator([input_image, target], training=True)
+        disc_generated_output = self.discriminator([input_image, gen_output], training=True)
+        # new
+        # disc_real_output = self.discriminator( target, training=True)
+        # disc_generated_output = self.discriminator( gen_output, training=True)
       elif(_argparse().model == 'p2p'):
         gen_output = self.generator(input_image, training=True)
         # normalize to [0,1]
@@ -89,27 +108,37 @@ class train_main:
         target = (target* 0.5) + 0.5
         gen_output = (gen_output* 0.5) + 0.5
         # replace image
-        inpaint_img = mask * target + (1 - mask) * gen_output
+        inpaint_img = mask * input_image + (1 - mask) * gen_output
         inpaint_img = tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
         # plot img
-        display_list = [input_image[0], target[0], gen_output[0], inpaint_img[0]]
-        title = ['Input Image', 'Ground Truth', 'Predicted Image', 'Inpaint Image']
+        #display_list = [input_image[0], target[0], gen_output[0], inpaint_img[0]]
+        #title = ['Input Image', 'Ground Truth', 'Predicted Image', 'Inpaint Image']
 
-        for i in range(4):
-          plt.subplot(1, 4, i+1)
-          plt.title(title[i])
-          # Getting the pixel values in the [0, 1] range to plot.
-          plt.imshow(display_list[i])
-          plt.axis('off')
-        #plt.imshow(inpaint_img[0])
-        plt.savefig('test_save_train.png')
+        #for i in range(4):
+         # plt.subplot(1, 4, i+1)
+         # plt.title(title[i])
+         # # Getting the pixel values in the [0, 1] range to plot.
+         # plt.imshow(display_list[i])
+         # plt.axis('off')
+        # #plt.imshow(inpaint_img[0])
+        # plt.savefig('test_save_train.png')
 
         # Discriminator
+        # old
         disc_real_output = self.discriminator([input_image, target], training=True)
         disc_generated_output = self.discriminator([input_image, gen_output], training=True)
+        # new
+        # disc_real_output = self.discriminator( target, training=True)
+        # disc_generated_output = self.discriminator( gen_output, training=True)
 
-      gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
-      disc_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target)
+      if(_argparse().loss_type == 'pconv'):
+        gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
+        disc_total_loss, disc_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target, loss_type = _argparse().loss_type, exclude_loss= _argparse().exclude_loss)
+      elif(_argparse().loss_type == 'p2p'):
+        gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
+        disc_total_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target, loss_type = _argparse().loss_type)
+      
+      self.model_gan_loss = gen_total_loss
 
 
     generator_gradients = gen_tape.gradient(gen_total_loss,
@@ -123,17 +152,20 @@ class train_main:
                                                 self.discriminator.trainable_variables))
 
     with self.summary_writer.as_default():
-      tf.summary.scalar('gen_total_loss', gen_total_loss, step=step//10)
-      tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step//10)
-      tf.summary.scalar('l1_hole_loss', hole_loss, step=step//10)
-      tf.summary.scalar('l1_valid_loss', valid_loss, step=step//10)
-      tf.summary.scalar('disc_loss', disc_loss, step=step//10)
-      tf.summary.scalar('perc_loss', perc_loss, step=step//10)
-      tf.summary.scalar('style_loss', style_loss, step=step//10)
-      tf.summary.scalar('total_variation_loss', tv_loss, step=step//10)
-      tf.summary.image("input img", input_image, step=step//10)
-      tf.summary.image("predict img", gen_output, step=step//10)
-      tf.summary.image("inpaint img", inpaint_img, step=step//10)
+      tf.summary.scalar('gen_total_loss', gen_total_loss, step=step)
+      tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=step)
+      tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step)
+      tf.summary.scalar('disc_total_loss', disc_total_loss, step=step)
+      if(_argparse().loss_type == 'pconv'):
+        tf.summary.scalar('disc_loss', disc_loss, step=step)
+        tf.summary.scalar('l1_hole_loss', hole_loss, step=step)
+        tf.summary.scalar('l1_valid_loss', valid_loss, step=step)
+        tf.summary.scalar('perc_loss', perc_loss, step=step)
+        tf.summary.scalar('style_loss', style_loss, step=step)
+        tf.summary.scalar('total_variation_loss', tv_loss, step=step)
+      # tf.summary.image("input img", input_image, step=step//10)
+      # tf.summary.image("predict img", gen_output, step=step//10)
+      # tf.summary.image("inpaint img", inpaint_img, step=step//10)
 
 
   def save_model(self,step):
@@ -148,10 +180,10 @@ class train_main:
       wandb.save(name_g)
       wandb.save(name_d)
 
-  def generate_images(self):
-    test_input = self.example_masked_images
-    mask = self.example_masks
-    tar = self.example_sample_labels
+  def generate_images(self,test_input,mask,tar):
+    # test_input = self.example_masked_images
+    # mask = self.example_masks
+    # tar = self.example_sample_labels
     if(_argparse().model == "pconv"):
       gen_output = self.generator([test_input,mask], training=True)
       inpaint_img = [mask * tar[0] + (1 - mask) * gen_output[0]]
@@ -183,8 +215,8 @@ class train_main:
   def fit(self):
     # for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
     start = time.time()
-    for step in range(self.steps):
-      for i in range(len(self.traingen)):
+    for step in tqdm(range(self.steps)):
+      for i in tqdm(range(len(self.traingen))):
         [masked_images, masks], sample_labels = self.traingen[i]
         input_image = masked_images.astype('float32')
         mask = masks.astype('float32')
@@ -192,12 +224,14 @@ class train_main:
         if(_argparse().model == 'p2p'):
           input_image = (input_image - 0.5)/0.5
           target = (target - 0.5)/0.5
+        self.train_step(input_image,mask,target, step)
+        # self.plot_count = self.plot_count + 1
         # for input_image, mask,target in zip(masked_images, masks, sample_labels):
           # input_image = tf.expand_dims(input_image, axis=0)
           # mask = tf.expand_dims(mask, axis=0)
           # target = tf.expand_dims(target, axis=0)
           # print(input_image.shape)
-      if (step) % 10 == 0:
+      if (step) % 1 == 0:
         # display.clear_output(wait=True)
 
         if step != 0:
@@ -214,17 +248,17 @@ class train_main:
         # print(ex_masked_images)
         # print(ex_masks)
         # print(ex_sample_labels)
-        self.generate_images()
-        print(f"Step: {step//10}k")
-        
-        
-      self.train_step(input_image,mask,target, step)
+        self.generate_images(ex_masked_images,ex_masks,ex_sample_labels)
+        print(f"Step: {step//1}")
 
       # Training step
-      if (step+1) % 10 == 0:
+      if (step+1) % 1 == 0:
         print('.', end='', flush=True)
 
-
+      # save best model
+      if self.model_gan_loss < self.best_gan_loss:
+        self.best_gan_loss = self.model_gan_loss
+        self.save_model('best-'+str(step))
       # Save (checkpoint) the model every 5k steps
       if (step + 1) % _argparse().save == 0:
         self.checkpoint.save(file_prefix=self.checkpoint_prefix)
@@ -240,6 +274,7 @@ def main():
     # print(_argparse().weightD)
     # print(_argparse().save)
     main_dir = _argparse().dir
+    train_test_config = _argparse().config_file
     batch_size = _argparse().batch_size
     # print(bool(strtobool(_argparse().wandb)))
     if(bool(strtobool(_argparse().wandb))):
@@ -248,15 +283,15 @@ def main():
 
     # main_dir = ''
     # list of training dataset
-    train_config_dir = main_dir + 'car_ds/data/train/config_zoom.txt'
-    train_mask_dir = main_dir + 'car_ds/data/train/masks.txt'
-    train_input_dir = main_dir + 'car_ds/data/train/masked_img.txt'
-    train_label_dir = main_dir + 'car_ds/data/train/output.txt'
+    train_config_dir = main_dir + 'car_ds/'+train_test_config+'/train/config_zoom.txt'
+    train_mask_dir = main_dir + 'car_ds/'+train_test_config+'/train/masks.txt'
+    train_input_dir = main_dir + 'car_ds/'+train_test_config+'/train/masked_img.txt'
+    train_label_dir = main_dir + 'car_ds/'+train_test_config+'/train/output.txt'
     # list of test dataset
-    test_config_dir = main_dir + 'car_ds/data/test/config_zoom.txt'
-    test_mask_dir = main_dir + 'car_ds/data/test/masks.txt'
-    test_input_dir = main_dir + 'car_ds/data/test/masked_img.txt'
-    test_label_dir = main_dir + 'car_ds/data/test/output.txt'
+    test_config_dir = main_dir + 'car_ds/'+train_test_config+'/test/config_zoom.txt'
+    test_mask_dir = main_dir + 'car_ds/'+train_test_config+'/test/masks.txt'
+    test_input_dir = main_dir + 'car_ds/'+train_test_config+'/test/masked_img.txt'
+    test_label_dir = main_dir + 'car_ds/'+train_test_config+'/test/output.txt'
 
     # list of dataset
     x_train = []
@@ -269,7 +304,7 @@ def main():
     image_size = (_argparse().img_size,_argparse().img_size)
     input_model_size = [_argparse().img_size,_argparse().img_size,3]
 
-    train = Dataset(train_config_dir,train_input_dir,train_mask_dir,train_label_dir,image_size)
+    train = Dataset(main_dir,train_config_dir,train_input_dir,train_mask_dir,train_label_dir,image_size)
     x_train, y_train, mask_train = train.process_data()
     # x_train = train.input_ds
     # y_train = train.label_ds
@@ -283,23 +318,28 @@ def main():
 
 
     ## Prepare training and testing mask-image pair generator (with discriminator)
-    traingen = createAugment(x_train, y_train,mask_train,batch_size=batch_size,dim=image_size)
+    traingen = createAugment(x_train, y_train,mask_train,batch_size=batch_size,dim=image_size,random_mask=bool(strtobool(_argparse().random_mask)))
     # print(type(traingen[0][0]))
     # testgen = createAugment(x_test, y_test,mask_test,batch_size=8,dim=(128,128), shuffle=False)
 
     # initial generator model
     keras.backend.clear_session()
     if(_argparse().model == 'pconv'):
-      generator = InpaintingModel().prepare_model(input_size=input_model_size)
-      generator.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=[dice_coef])
-      #keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='model_v2_128.png')
-      # initial discriminator model
-      discriminator = Discriminator(input_size=input_model_size)
-      #tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=64)
+      # old pconv -----------------------
+      # generator = InpaintingModel().prepare_model(input_size=input_model_size)
+      # generator.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=[dice_coef])
+      # #keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='model_v2_128.png')
+      # # initial discriminator model
+      # discriminator = Discriminator(input_size=input_model_size)
+      # #tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=64)
+      # new pconv -------------------------
+      generator = InpaintingModel().build_pconv_unet(input_size=input_model_size,train_bn = bool(strtobool(_argparse().wandb)))
+      # keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='new_pconv_128.png')
+      discriminator = p2pD.Discriminator_con(input_shape=input_model_size)
     elif(_argparse().model == 'p2p'):
       generator = p2pG.Generator(input_shape=input_model_size)
       # keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='p2p_G_256.png')
-      discriminator = p2pD.Discriminator(input_shape=input_model_size)
+      discriminator = p2pD.Discriminator_con(input_shape=input_model_size)
       # tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=64, to_file='p2p_D_256.png')
 
     if(_argparse().weightG != ''):
