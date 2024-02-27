@@ -9,7 +9,7 @@ from tools.process_img import preprocess_img
 ## Ref: https://stanford.edu/~shervine/blog/keras-how-to-generate-data-on-the-fly.
 class createAugment(keras.utils.Sequence):
   'Generates data for Keras'
-  def __init__(self, X, y,mask_ds, batch_size=8, dim=(32, 32), n_channels=3, shuffle=True):
+  def __init__(self, X, y,mask_ds, batch_size=8, dim=(32, 32), n_channels=3, shuffle=True, random_mask = False):
       'Initialization'
       self.batch_size = batch_size
       self.X = X/255.0
@@ -18,6 +18,7 @@ class createAugment(keras.utils.Sequence):
       self.dim = dim
       self.n_channels = n_channels
       self.shuffle = shuffle
+      self.random_mask = random_mask
 
       self.on_epoch_end()
 
@@ -65,20 +66,39 @@ class createAugment(keras.utils.Sequence):
 
   def __createMask(self, img, idx):
     ## Prepare masking matrix
-    # mask = np.full((32,32,3), 255, np.uint8) ## White background
-    # for _ in range(np.random.randint(1, 10)):
-    #   # Get random x locations to start line
-    #   x1, x2 = np.random.randint(1, 32), np.random.randint(1, 32)
-    #   # Get random y locations to start line
-    #   y1, y2 = np.random.randint(1, 32), np.random.randint(1, 32)
-    #   # Get random thickness of the line drawn
-    #   thickness = np.random.randint(1, 3)
-    #   # Draw black line on the white mask
-    #   cv2.line(mask,(x1,y1),(x2,y2),(0,0,0),thickness)
+    mask = self.mask_ds[idx]
+    # mask = np.full((self.dim,self.dim,3), 255, np.uint8) ## White background
+    # Set size scale
+    if(self.random_mask):
+        size = int((self.dim[0] + self.dim[1]) * 0.03)
+        if self.dim[0] < 64 or self.dim[1] < 64:
+            raise Exception("Width and Height of mask must be at least 64!")
+        # Draw random lines
+        for _ in range(np.random.randint(1, 10)):
+            # Get random x locations to start line
+            x1, x2 = np.random.randint(1, self.dim[0]), np.random.randint(1, self.dim[1])
+            # Get random y locations to start line
+            y1, y2 = np.random.randint(1, self.dim[0]), np.random.randint(1, self.dim[1])
+            # Get random thickness of the line drawn
+            thickness = np.random.randint(1, 3)
+            # Draw black line on the white mask
+            cv2.line(mask,(x1,y1),(x2,y2),(0,0,0),thickness)
+            # Draw random circles
+        for _ in range(np.random.randint(1, 20)):
+            x1, y1 = np.random.randint(1, self.dim[0]), np.random.randint(1, self.dim[1])
+            radius = np.random.randint(3, size)
+            cv2.circle(mask,(x1,y1),radius,(0,0,0), -1)
+        # Draw random ellipses
+        for _ in range(np.random.randint(1, 20)):
+            x1, y1 = np.random.randint(1, self.dim[0]), np.random.randint(1, self.dim[1])
+            s1, s2 = np.random.randint(1, self.dim[0]), np.random.randint(1, self.dim[1])
+            a1, a2, a3 = np.random.randint(3, 180), np.random.randint(3, 180), np.random.randint(3, 180)
+            thickness = np.random.randint(3, size)
+            cv2.ellipse(mask, (x1,y1), (s1,s2), a1, a2, a3,(0,0,0), thickness)
 
     # mask = convert_img
     # mask = cv2.bitwise_not(mask_img) # for only u-net
-    mask = self.mask_ds[idx]
+    # mask = self.mask_ds[idx]
     ## Mask the image
     # masked_image = img.copy()
     masked_image = mask * img + (1 - mask) * 1.0
@@ -89,7 +109,8 @@ class createAugment(keras.utils.Sequence):
     return masked_image, mask
 
 class Dataset:
-    def __init__(self,config_list,input_dir,mask_dir,label_dir,image_size=(128,128)):
+    def __init__(self,main_dir,config_list,input_dir,mask_dir,label_dir,image_size=(128,128)):
+        self.main_dir = main_dir
         self.config_list = config_list
         self.input_dir = input_dir
         self.mask_dir = mask_dir
@@ -110,20 +131,20 @@ class Dataset:
         with open(self.input_dir) as f:
             for count, line in enumerate(tqdm(f)):
                 # print(line.strip())
-                img = preprocess_img(line.strip(), self.config[count],self.image_size)
+                img = preprocess_img(self.main_dir+line.strip(), self.config[count],self.image_size)
                 self.input_ds.append(img)
 
         with open(self.mask_dir) as f:
             for count, line in enumerate(tqdm(f)):
                 # print(line.strip())
-                img = preprocess_img(line.strip(), self.config[count],self.image_size)
+                img = preprocess_img(self.main_dir+ line.strip(), self.config[count],self.image_size)
                 img = cv2.bitwise_not(img)
                 self.mask_ds.append(img)
 
         with open(self.label_dir) as f:
             for count, line in enumerate(tqdm(f)):
                 # print(line.strip())
-                img = preprocess_img(line.strip(), self.config[count],self.image_size)
+                img = preprocess_img(self.main_dir + line.strip(), self.config[count],self.image_size)
                 self.label_ds.append(img)
         
         self.input_ds = np.array(self.input_ds).astype('float32')
