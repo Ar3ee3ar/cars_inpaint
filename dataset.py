@@ -9,12 +9,15 @@ from tools.process_img import preprocess_img
 ## Ref: https://stanford.edu/~shervine/blog/keras-how-to-generate-data-on-the-fly.
 class createAugment(keras.utils.Sequence):
   'Generates data for Keras'
-  def __init__(self, X, y,mask_ds=None, batch_size=8, dim=(32, 32), n_channels=3, shuffle=True, random_mask = False):
+  def __init__(self, X, y,mask_ds, batch_size=8, dim=(32, 32), n_channels=3, shuffle=True, random_mask = False):
       'Initialization'
       self.batch_size = batch_size
       self.X = X/255.0
       self.y = y/255.0
-      self.mask_ds = mask_ds/255.0
+      if mask_ds is not None:
+        self.mask_ds = mask_ds/255.0
+      else:
+        self.mask_ds = mask_ds
       self.dim = dim
       self.n_channels = n_channels
       self.shuffle = shuffle
@@ -66,10 +69,10 @@ class createAugment(keras.utils.Sequence):
 
   def __createMask(self, img, idx):
     ## Prepare masking matrix
-    if(self.mask is not None):
+    if(self.mask_ds is not None):
         mask = self.mask_ds[idx]
-    elif(self.mask is None):
-        mask = np.full((self.dim,self.dim,3), 255, np.uint8) ## White background
+    elif(self.mask_ds is None):
+        mask = np.full((self.dim[0],self.dim[1],3), 1.0, np.float32) ## White background
     # Set size scale
     if(self.random_mask):
         size = int((self.dim[0] + self.dim[1]) * 0.03)
@@ -129,27 +132,37 @@ class Dataset:
                 self.config.append(float(line.strip()))
     
     def process_data(self):
-        self.read_config()
+        if self.config_list is not None:
+            self.read_config()
         with open(self.input_dir) as f:
             for count, line in enumerate(tqdm(f)):
                 # print(line.strip())
-                img = preprocess_img(self.main_dir+line.strip(), self.config[count],self.image_size)
+                if self.config_list is not None:
+                    img = preprocess_img(self.main_dir+line.strip(), self.config[count],self.image_size)
+                else:
+                    img = preprocess_img(self.main_dir+line.strip(), 0.0 ,self.image_size)
                 self.input_ds.append(img)
+        self.input_ds = np.array(self.input_ds).astype('float32')
 
-        with open(self.mask_dir) as f:
-            for count, line in enumerate(tqdm(f)):
-                # print(line.strip())
-                img = preprocess_img(self.main_dir+ line.strip(), self.config[count],self.image_size)
-                img = cv2.bitwise_not(img)
-                self.mask_ds.append(img)
+        if self.mask_dir is not None:
+            with open(self.mask_dir) as f:
+                for count, line in enumerate(tqdm(f)):
+                    # print(line.strip())
+                    img = preprocess_img(self.main_dir+ line.strip(), self.config[count],self.image_size)
+                    img = cv2.bitwise_not(img)
+                    self.mask_ds.append(img)
+            self.mask_ds = np.array(self.mask_ds).astype('float32')
+        else:
+            self.mask_ds = None
 
         with open(self.label_dir) as f:
             for count, line in enumerate(tqdm(f)):
                 # print(line.strip())
-                img = preprocess_img(self.main_dir + line.strip(), self.config[count],self.image_size)
+                if self.config_list is not None:
+                    img = preprocess_img(self.main_dir + line.strip(), self.config[count],self.image_size)
+                else:
+                    img = preprocess_img(self.main_dir + line.strip(), 0.0 ,self.image_size)
                 self.label_ds.append(img)
-        
-        self.input_ds = np.array(self.input_ds).astype('float32')
         self.label_ds = np.array(self.label_ds).astype('float32')
-        self.mask_ds = np.array(self.mask_ds).astype('float32')
+
         return(self.input_ds,self.label_ds,self.mask_ds)

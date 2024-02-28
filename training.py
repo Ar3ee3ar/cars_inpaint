@@ -45,6 +45,7 @@ def _argparse():
     parser.add_argument("--random_mask", type=str, nargs='?', const='True', default="False", help="enable random mask")
     parser.add_argument("--loss_type", "-loss_type",type=str, default='pconv', help="model name: pconv|p2p")
     parser.add_argument('--exclude_loss', '-loss-list', nargs='+', default=[], help = "perc | style | tv | valid | hole")
+    parser.add_argument("--inpaint_mode", "-inpaint_mode",type=str, default='per', help="training model to inpaint per|cube view")
     arg = parser.parse_args()
     return arg
 
@@ -224,7 +225,7 @@ class train_main:
         if(_argparse().model == 'p2p'):
           input_image = (input_image - 0.5)/0.5
           target = (target - 0.5)/0.5
-        self.train_step(input_image,mask,target, step)
+      self.train_step(input_image,mask,target, step)
         # self.plot_count = self.plot_count + 1
         # for input_image, mask,target in zip(masked_images, masks, sample_labels):
           # input_image = tf.expand_dims(input_image, axis=0)
@@ -274,7 +275,7 @@ def main():
     # print(_argparse().weightD)
     # print(_argparse().save)
     main_dir = _argparse().dir
-    train_test_config = _argparse().config_file
+    config_folder = _argparse().config_file
     batch_size = _argparse().batch_size
     # print(bool(strtobool(_argparse().wandb)))
     if(bool(strtobool(_argparse().wandb))):
@@ -283,15 +284,15 @@ def main():
 
     # main_dir = ''
     # list of training dataset
-    train_config_dir = main_dir + 'car_ds/'+train_test_config+'/train/config_zoom.txt'
-    train_mask_dir = main_dir + 'car_ds/'+train_test_config+'/train/masks.txt'
-    train_input_dir = main_dir + 'car_ds/'+train_test_config+'/train/masked_img.txt'
-    train_label_dir = main_dir + 'car_ds/'+train_test_config+'/train/output.txt'
+    # train_config_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/config_zoom.txt'
+    # train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/masks.txt'
+    # train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/masked_img.txt'
+    # train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/output.txt'
     # list of test dataset
-    test_config_dir = main_dir + 'car_ds/'+train_test_config+'/test/config_zoom.txt'
-    test_mask_dir = main_dir + 'car_ds/'+train_test_config+'/test/masks.txt'
-    test_input_dir = main_dir + 'car_ds/'+train_test_config+'/test/masked_img.txt'
-    test_label_dir = main_dir + 'car_ds/'+train_test_config+'/test/output.txt'
+    train_config_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/config_zoom.txt'
+    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/masks.txt'
+    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/masked_img.txt'
+    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/output.txt'
 
     # list of dataset
     x_train = []
@@ -304,7 +305,10 @@ def main():
     image_size = (_argparse().img_size,_argparse().img_size)
     input_model_size = [_argparse().img_size,_argparse().img_size,3]
 
-    train = Dataset(main_dir,train_config_dir,train_input_dir,train_mask_dir,train_label_dir,image_size)
+    if(_argparse().inpaint_mode == 'per'):
+      train = Dataset(main_dir = main_dir,config_list = train_config_dir,input_dir = train_input_dir,mask_dir = train_mask_dir,label_dir = train_label_dir,image_size = image_size)
+    if(_argparse().inpaint_mode == 'cube'):
+      train = Dataset(main_dir = main_dir,config_list = None,input_dir = train_input_dir,mask_dir=None,label_dir = train_label_dir,image_size = image_size)
     x_train, y_train, mask_train = train.process_data()
     # x_train = train.input_ds
     # y_train = train.label_ds
