@@ -3,13 +3,15 @@ logs/
 venv/
 wandb/
 weight/
-*/_pycache__
+*/__pycache__
 
 # test file
 test.py
 test_gen.py
 test_loss.py
 test_img/
+test_metrics.py
+test_py/
 
 # tensorboard file
 view_progress.py
