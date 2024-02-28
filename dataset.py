@@ -9,7 +9,7 @@ from tools.process_img import preprocess_img
 ## Ref: https://stanford.edu/~shervine/blog/keras-how-to-generate-data-on-the-fly.
 class createAugment(keras.utils.Sequence):
   'Generates data for Keras'
-  def __init__(self, X, y,mask_ds, batch_size=8, dim=(32, 32), n_channels=3, shuffle=True, random_mask = False):
+  def __init__(self, X, y,mask_ds=None, batch_size=8, dim=(32, 32), n_channels=3, shuffle=True, random_mask = False):
       'Initialization'
       self.batch_size = batch_size
       self.X = X/255.0
@@ -66,8 +66,10 @@ class createAugment(keras.utils.Sequence):
 
   def __createMask(self, img, idx):
     ## Prepare masking matrix
-    mask = self.mask_ds[idx]
-    # mask = np.full((self.dim,self.dim,3), 255, np.uint8) ## White background
+    if(self.mask is not None):
+        mask = self.mask_ds[idx]
+    elif(self.mask is None):
+        mask = np.full((self.dim,self.dim,3), 255, np.uint8) ## White background
     # Set size scale
     if(self.random_mask):
         size = int((self.dim[0] + self.dim[1]) * 0.03)
