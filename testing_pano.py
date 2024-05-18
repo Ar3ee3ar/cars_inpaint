@@ -73,27 +73,30 @@ def main():
        generator.load_weights(_argparse().weightG) # 500
     
     for count_num in count_list:
-      img_path = main_dir + "car_ds\Input\LB_0_"+str(count_num).rjust(6, '0')+".jpg"
+      img_path = main_dir + "car_ds\pic\Input\LB_0_"+str(count_num).rjust(6, '0')+".jpg"
       # print(img_path)
       count = str(count_num)
       start_pano = time.time()
       # mask process
-      mask_img_pano = preprocess_img(mask_path,0.0,img_size=(1000,1000)) # for inpaint in pano
-      mask_img = preprocess_img(mask_path,0.0,img_size=(1000,1000)) # for model
+      mask_img_pano = preprocess_img(mask_path,img_size=(1000,1000)) # for inpaint in pano
+      mask_img = preprocess_img(mask_path,img_size=(1000,1000)) # for model
       # print('preprocess: ',(time.time() - start_pano))
       # mask image
       mask_img = crop_center(mask_img,(256,256)) # resize to 290,190
-      mask_img = preprocess_img(mask_img,0.0,img_size=image_size) # resize to match input model (256,256)
+      mask_img = preprocess_img(mask_img,img_size=image_size) # resize to match input model (256,256)
       # print('crop center mask: ',(time.time() - start_pano))
       # project to equirectangular (get mask image)
       equ = Equirectangular(mask_img_pano,167, 0, -90,'img')    
       mask_pano_img,mask = equ.GetEquirec(height,width)
+      # save mask image
+      # patch_image_im = Image.fromarray(((mask_pano_img)).astype(np.uint8))
+      # patch_image_im.save("D:/inpaint_gan/car_ds/pic/car_equi_mask.jpg")
       # plt.imshow(mask_pano_img)
       # plt.show()
       # print('mask equi: ',(time.time() - start_pano))   
 
       # load image with preprocess
-      car_pano_img = preprocess_img(img_path,0.0,img_size=(width,height))
+      car_pano_img = preprocess_img(img_path,img_size=(width,height))
       # if(_argparse().model_name == 'pconv'):
       # elif(_argparse().model_name =='p2p'):
       #    mask_img = preprocess_img("D:/inpaint_gan/car_ds/mask/mask_image_test.jpg",0.0,img_size=image_size) # for model
@@ -107,7 +110,7 @@ def main():
       # plt.show()
       # car image
       per_img = crop_center(per_img_1000,(256,256)) # resize to 290,190
-      car_img = preprocess_img(per_img,0.0,img_size=image_size) # resize to match input model (256,256)
+      car_img = preprocess_img(per_img,img_size=image_size) # resize to match input model (256,256)
       # print('crop center car: ',(time.time() - start_pano))
 
 
@@ -142,6 +145,9 @@ def main():
         end_model = time.time()
         # print('model inpaint time: ',(end_model - start_model))
         predict_image_norm = predict_image[0].numpy()
+        # save patch image
+        pred_image_im = Image.fromarray(((predict_image_norm)*255.0).astype(np.uint8))
+        pred_image_im.save(main_dir+"test_img/"+name_folder+"/"+_argparse().save_fol+"/"+count+"_pred.jpg")
       # print('finish predict')
 
       # print(predict_image_norm)
@@ -151,7 +157,7 @@ def main():
       mask_img_pano = mask_img_pano/255.0
       per_img_1000 = per_img_1000/255.0
       # if(_argparse().random_mask == False):
-      predict_image_norm = preprocess_img(predict_image_norm,0.0,img_size=(256,256)) # resize to match input model (256,256)
+      predict_image_norm = preprocess_img(predict_image_norm,img_size=(256,256)) # resize to match input model (256,256)
       predict_image_norm = pad_images_to_same_size(predict_image_norm)
       predict_image_norm = ((1 - mask_img_pano) * per_img_1000) + (mask_img_pano * predict_image_norm)
       # print('inpaint output: ',(time.time() - start_pano))
@@ -176,7 +182,7 @@ def main():
          print(count,' : ',all_time/float(count))
       # print("all process time: ",(end_pano - start_pano))
       # plt.imshow(inpaint_fill)
-      car_pano_gps = preprocess_img(main_dir+'car_ds/image_test2/'+count+'_afterfill.jpg',0.0,(1000,1000))
+      car_pano_gps = preprocess_img(main_dir+'car_ds/pic/image_test2/'+count+'_afterfill.jpg',(1000,1000))
       equ = Equirectangular(car_pano_gps,167, 0, -90)    
       inpaint_pano_gps_img,mask = equ.GetEquirec(height,width)
       inpaint_gps_fill = inpaint_pano(inpaint_pano_gps_img,mask_pano_img,car_pano_img)

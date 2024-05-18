@@ -52,15 +52,15 @@ def main():
     predict_cube_img = []
 
     main_dir = _argparse().dir
-    img_path = _argparse().img
+    img_path = main_dir + "car_ds/pic/Output/LB_0_"+str(_argparse().img).rjust(6, '0')+".jpg"
     mask_path = _argparse().mask
 
-    save_path = main_dir+"test_img/full/"
+    save_path = main_dir+"test_img/phase/"
 
     # load image with preprocess
-    car_pano_img = preprocess_img(img_path,0.0,img_size=(width,height))
-    mask_img_pano = preprocess_img(mask_path,0.0,img_size=(width,height)) # for inpaint in pano
-    count = str(329)
+    car_pano_img = preprocess_img(img_path,img_size=(width,height))
+    mask_img_pano = preprocess_img(mask_path,img_size=(width,height)) # for inpaint in pano
+    count = str((((((img_path.split('/'))[5]).split('_'))[-1]).split('.'))[0])
     # save resize car
     car_pano_resize = Image.fromarray(((car_pano_img)).astype(np.uint8))
     car_pano_resize.save(save_path+count+"_car_pano.jpg")
@@ -70,8 +70,10 @@ def main():
 
     if(_argparse().view == 'cube'):
         # change to cube map
-        car_cube_img = e2c(car_pano_img, face_w=256, mode='bilinear', cube_format='list') # [front, right, back, left, top, bottom]
-        mask_cube_img = e2c(mask_img_pano, face_w=256, mode='bilinear', cube_format='list') # [front, right, back, left, top, bottom]
+        car_cube_img_all = e2c(car_pano_img, face_w=256, mode='bilinear', cube_format='list') # [front, right, back, left, top, bottom]
+        mask_cube_img_all = e2c(mask_img_pano, face_w=256, mode='bilinear', cube_format='list') # [front, right, back, left, top, bottom]
+        car_cube_img = car_cube_img_all[0:4]
+        mask_cube_img = mask_cube_img_all[0:4]
     elif(_argparse().view == 'top'):
         # change to view
         equ = Perspective(car_pano_img)    # Load equirectangular image
@@ -102,10 +104,15 @@ def main():
 
     for i in range(len(mask_cube_img)):
         mask_cube_img[i] = cv2.bitwise_not(mask_cube_img[i]) # for only u-net
-
-    testgen = createAugment(np.array(car_cube_img), np.array(car_cube_img),np.array(mask_cube_img),batch_size=1,dim=image_size, shuffle=False, random_mask=False)
+        
+    bs = 1
+    testgen = createAugment(np.array(car_cube_img), np.array(car_cube_img),np.array(mask_cube_img),batch_size=bs,dim=image_size, shuffle=False, random_mask=False)
     for i in range(len(testgen)):
+        generator.load_weights(_argparse().weightG) # 500
         [masked_image, mask], car_img = testgen[i]
+        masked_image = masked_image.astype('float32')
+        mask = mask.astype('float32')
+        car_img = car_img.astype('float32')
         # plt.imshow(masked_image[0])
         # plt.show()
 
@@ -123,16 +130,43 @@ def main():
         # ------------------------------------------------
         elif(_argparse().model_name == 'pconv'):
             inputs = [masked_image, mask] # pconv
+            # print(inputs.shape)
             predict_image = generator(inputs, training=True)
-            predict_image_norm = predict_image[0].numpy()
+            if(bs == 1):
+                predict_image_norm = predict_image[0].numpy()
+            elif(bs == 4):
+                predict_image_norm = predict_image.numpy()
+
+            fig, axs = plt.subplots(nrows=2, ncols=2)
+            axs[0][0].imshow(masked_image[0])
+            axs[0][1].imshow(mask[0])
+            axs[1][0].imshow(predict_image_norm)
+            plt.show()
+
+            # pred_image_im = Image.fromarray(((predict_image_norm)*255.0).astype(np.uint8))
+            # pred_image_im.save(save_path+count+"_gan_pred.jpg")
             # predict_image = generator.predict(inputs)
             # predict_image_norm = predict_image[0]
-            # fig, axs = plt.subplots(nrows=2, ncols=3)
-            # axs[0][0].imshow(mask_pano_img/255.0)
-
-        predict_image_norm = (mask[0] * masked_image[0]) + ((1 - mask[0]) * predict_image_norm)
+            # print(predict_image_norm[0])
+            # fig, axs = plt.subplots(nrows=2, ncols=2)
+            # axs[0][0].imshow(predict_image_norm[0])
+            # axs[0][1].imshow(predict_image_norm[1])
+            # axs[1][0].imshow(predict_image_norm[2])
+            # axs[1][1].imshow(predict_image_norm[3])
+            # plt.show()
         
-        predict_cube_img.append(predict_image_norm)
+        if(bs == 1):
+            # predict_image_norm = (mask[0] * masked_image[0]) + ((1 - mask[0]) * predict_image_norm)
+            # predict_image_norm = tf.convert_to_tensor(predict_image_norm, dtype=tf.float32)
+            predict_cube_img.append(predict_image_norm)
+        elif(bs == 4):
+            for i in range(4):
+                # predict_image_norm_mask = (mask[i] * masked_image[i]) + ((1 - mask[i]) * predict_image_norm[i])
+                # predict_image_norm_mask = tf.convert_to_tensor(predict_image_norm_mask, dtype=tf.float32)
+                predict_cube_img.append(predict_image_norm[i])
+    if(_argparse().view == 'cube'):
+        predict_cube_img.append(car_cube_img_all[4]/255.0)
+        predict_cube_img.append(car_cube_img_all[5]/255.0)
 
     if(_argparse().view == 'cube'):
         cube_img = c2e(predict_cube_img, h=height, w=width, mode='bilinear', cube_format='list') # [front, right, back, left, top, bottom]
@@ -140,7 +174,6 @@ def main():
         plt.imshow(cube_img)
         plt.show()
         if(bool(strtobool(_argparse().save))):
-            save_path = main_dir+"test_img/full/"
             out_image_im = Image.fromarray(((cube_img)*255.0).astype(np.uint8))
             out_image_im.save(save_path+count+"_gan_inpaint_cube_con_output.jpg")
 
@@ -149,27 +182,35 @@ def main():
         cube_img = c2e(predict_cube_img, h=height, w=width, mode='bilinear', cube_format='list') # [front, right, back, left, top, bottom]
         # cube_img = cube_img/255.0
         inpaint_fill = inpaint_pano(cube_img*255.0,mask_img_pano,car_pano_img)
-        fig, axs = plt.subplots(nrows=2, ncols=2)
-        axs[0][0].imshow(cube_img)
-        axs[0][1].imshow(inpaint_fill)
-        # plt.imshow(inpaint_fill)
-        plt.show()
+        # fig, axs = plt.subplots(nrows=2, ncols=2)
+        # axs[0][0].imshow(cube_img)
+        # axs[0][1].imshow(inpaint_fill)
+        # # plt.imshow(inpaint_fill)
+        # plt.show()
         if(bool(strtobool(_argparse().save))):
-            save_path = main_dir+"test_img/full/"
             impainted_image_im = Image.fromarray(((inpaint_fill)*255.0).astype(np.uint8))
             impainted_image_im.save(save_path+count+"_gan_inpaint_cube_con.jpg")
     elif(_argparse().view == 'top'):
         cube_img = predict_cube_img[0]
+        pred_image_im = Image.fromarray(((cube_img)*255.0).astype(np.uint8))
+        pred_image_im.save(save_path+count+"_gan_inpaint_top.jpg")
+        # ------------- inpaint by high-resolution ------------------------
+        # cube_img = preprocess_img("D:/inpaint_gan/test_img/upscale/000873_gan_inpaint_top_out.jpg",img_size=(1000,1000))
+        # cube_img = cube_img/255.0
+        # ---------------------------------------------------
+        # ----------- inpaint by bicubic upscale ------------------------
+        # cube_img = cv2.resize(cube_img, (1000,1000))
+        # ---------------------------------------------------------------
         equ = Equirectangular(cube_img,167, 0, -90)    
         inpaint_pano_img,mask = equ.GetEquirec(height,width)
         inpaint_fill = inpaint_pano(inpaint_pano_img*255.0,mask_img_pano,car_pano_img)
-        fig, axs = plt.subplots(nrows=2, ncols=3)
-        axs[0][0].imshow(car_cube_img[0])
-        axs[0][1].imshow(mask)
-        axs[0][2].imshow(cube_img)
-        axs[1][0].imshow(inpaint_pano_img)
-        axs[1][1].imshow(inpaint_fill)
-        plt.show()
+        # fig, axs = plt.subplots(nrows=2, ncols=3)
+        # axs[0][0].imshow(car_cube_img[0])
+        # axs[0][1].imshow(mask)
+        # axs[0][2].imshow(cube_img)
+        # axs[1][0].imshow(inpaint_pano_img)
+        # axs[1][1].imshow(inpaint_fill)
+        # plt.show()
 
         if(bool(strtobool(_argparse().save))):
 

@@ -5,7 +5,7 @@ import tensorflow_io as tfio
 
 tf.config.run_functions_eagerly(True)
 
-def preprocess_img (path_img, zoom, img_size=(128,128)):
+def preprocess_img (path_img, img_size=(128,128)):
   # print(type(path_img))
   if isinstance(path_img, str): # input 
     img = cv2.imread(path_img)
@@ -13,8 +13,6 @@ def preprocess_img (path_img, zoom, img_size=(128,128)):
   # elif isinstance(path_img, (np.ndarray, np.generic) ):
   else:
     img = path_img
-  if(zoom != 0.0):
-    img = np.array(tf.image.central_crop(img,zoom))
   img = cv2.resize(img, img_size)
   return img
 
@@ -54,3 +52,14 @@ def pad_images_to_same_size(images,new_image_width = 1000,new_image_height=1000)
     # plt.imshow(result)
     # plt.show()
     return result
+
+def move_img(img,tx,ty):
+    M = np.float32([[1,0,tx],[0,1,ty]])
+    dst = cv2.warpAffine(img,M,(img.shape[0],img.shape[1]),borderValue=(1,1,1))
+    return dst
+
+def zoom_img(img, zoom_factor=2):
+    return cv2.resize(img, (img.shape[0],img.shape[1]), fx=zoom_factor, fy=zoom_factor)
+
+def flip_img(img):
+    return cv2.flip(img, 1) 

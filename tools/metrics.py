@@ -28,7 +28,12 @@ class metrics:
         mse = np.mean(np.square(self.gen_img - self.gt_img))
         return mse
     
+    def mae(self):
+        mae = np.mean(np.abs(self.gen_img - self.gt_img))
+        return mae
+    
     def ssim(self):
+        sum_ssim = 0
         k1 = 0.01
         k2 = 0.03
         L = self.max_pixel
@@ -38,21 +43,26 @@ class metrics:
         kernel = cv2.getGaussianKernel(11, 1.5)
         window = np.outer(kernel, kernel.transpose())
 
-        mu1 = cv2.filter2D(self.gen_img, -1, window)[5:-5, 5:-5]  # valid
-        mu2 = cv2.filter2D(self.gt_img, -1, window)[5:-5, 5:-5]
-        mu1_sq = mu1**2
-        mu2_sq = mu2**2
-        mu1_mu2 = mu1 * mu2
-        sigma1_sq = cv2.filter2D(self.gen_img**2, -1, window)[5:-5, 5:-5] - mu1_sq
-        sigma2_sq = cv2.filter2D(self.gt_img**2, -1, window)[5:-5, 5:-5] - mu2_sq
-        sigma12 = cv2.filter2D(self.gen_img * self.gt_img, -1, window)[5:-5, 5:-5] - mu1_mu2
+        # print(len(self.gen_img))
 
-        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
-                                                            (sigma1_sq + sigma2_sq + C2))
-        return ssim_map.mean()
+        for i in range(len(self.gen_img)):
+            mu1 = cv2.filter2D(self.gen_img[i], -1, window)[5:-5, 5:-5]  # valid
+            mu2 = cv2.filter2D(self.gt_img[i], -1, window)[5:-5, 5:-5]
+            mu1_sq = mu1**2
+            mu2_sq = mu2**2
+            mu1_mu2 = mu1 * mu2
+            sigma1_sq = cv2.filter2D(self.gen_img[i]**2, -1, window)[5:-5, 5:-5] - mu1_sq
+            sigma2_sq = cv2.filter2D(self.gt_img[i]**2, -1, window)[5:-5, 5:-5] - mu2_sq
+            sigma12 = cv2.filter2D(self.gen_img[i] * self.gt_img[i], -1, window)[5:-5, 5:-5] - mu1_mu2
+
+            ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
+                                                                (sigma1_sq + sigma2_sq + C2))
+            sum_ssim = sum_ssim + ssim_map.mean()
+        return sum_ssim
         # return structural_similarity(self.gt_img, self.gen_img, multichannel=True)
 
     def high_pass_x_y(self,image):
+        # print(image.shape)
         if(image.shape[2] == 4):
             x_var = image[:, :, 1:, :] - image[:, :, :-1, :] # pixel diff equation
             y_var = image[:, 1:, :, :] - image[:, :-1, :, :]
