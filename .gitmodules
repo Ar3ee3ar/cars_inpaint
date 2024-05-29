@@ -3,4 +3,4 @@
 	url = https://github.com/MathiasGruber/PConv-Keras
 [submodule "partial_conv/deepimageinpainting"]
 	path = partial_conv/deepimageinpainting
-	url = https://github.com/ayulockin/deepimageinpainting/tree/master
+	url = https://github.com/ayulockin/deepimageinpainting
