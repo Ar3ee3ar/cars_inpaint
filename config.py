@@ -19,7 +19,8 @@ config = {
     "inpaint_mode" : "per",
     "train_phase" : 2,
     "cont": False,
-    "adapt_weight" : False,
+    "adapt_weight" : "SoftAdapt",
+    "update_epoch" : 2,
     "loss_lambda":{
         "LAMBDA_adv": 1,
         "LAMBDA_l1": 100,

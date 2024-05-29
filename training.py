@@ -24,6 +24,7 @@ from tools.loss import discriminator_loss,generator_loss, generator_l1_loss
 from tools.metrics import metrics
 # from tools.SoftAdapt.softadapt import SoftAdapt, NormalizedSoftAdapt, LossWeightedSoftAdapt
 from config import cfg
+from decimal import Decimal # fix overflow error
 
 # pix2pix
 import pix2pix.Generator as p2pG
@@ -31,6 +32,8 @@ import pix2pix.Discriminator as p2pD
 #import pix2pix.Discriminator_con as p2pD_con
 
 tf.config.run_functions_eagerly(True)
+# physical_devices = tf.config.list_physical_devices('GPU')
+# tf.config.experimental.set_memory_growth(physical_devices[0], enable=True)
 # tf.experimental.numpy.experimental_enable_numpy_behavior()
 
 # Description: for setting model
@@ -105,6 +108,8 @@ class train_main:
         "LAMBDA_valid": 0,
         "LAMBDA_style": 1
     }
+    # store training loss
+    self.out_loss = [0,0,0,0]
 
     self.fit()
 
@@ -255,7 +260,7 @@ class train_main:
         # tf.summary.image("input img", input_image, step=step//10)
         # tf.summary.image("predict img", gen_output, step=step//10)
         # tf.summary.image("inpaint img", inpaint_img, step=step//10)
-      return [gen_gan_loss.numpy(), gen_l1_loss.numpy(), perc_loss.numpy(), tv_loss.numpy(), style_loss.numpy()]
+      return [gen_l1_loss.numpy(), perc_loss.numpy(), tv_loss.numpy(), style_loss.numpy()]
 
 
   def save_model(self,step):
@@ -308,7 +313,7 @@ class train_main:
     l2_loss = 0
     psnr = 0
     ssim = 0
-    for i in tqdm(range(2)):
+    for i in tqdm(range(len(self.valgen))):
       [masked_images, masks], sample_labels = self.valgen[i]
       input_image = masked_images.astype('float32')
       mask = masks.astype('float32')
@@ -343,25 +348,57 @@ class train_main:
     # for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
     start = time.time()
 
-    if(cfg.adapt_weight):
+    if(cfg.adapt_weight == "SoftAdapt"):
       # Change 1: Create a SoftAdapt object (with your desired variant)
       softadapt_object = LossWeightedSoftAdapt(beta=0.1)
 
       # Change 2: Define how often SoftAdapt calculate weights for the loss components
-      epochs_to_make_updates = 2
+      epochs_to_make_updates = cfg.update_epoch
 
       # Change 3: Initialize lists to keep track of loss values over the epochs we defined above
-      loss_of_adv = []
+      # loss_of_adv = []
       loss_of_l1 = []
       loss_of_perc = []
       loss_of_tv = []
       loss_of_style = []
       # Initializing adaptive weights to all ones.
-      adapt_weights = torch.tensor([1,1,1,1,1])
-    else:
-      adapt_weights = torch.tensor([cfg.loss_lambda.LAMBDA_adv, cfg.loss_lambda.LAMBDA_l1, cfg.loss_lambda.LAMBDA_perc,
-                                    cfg.loss_lambda.LAMBDA_tv, cfg.loss_lambda.LAMBDA_style])
+      adapt_weights = torch.tensor([1,1,1,1])
+      #adapt_weights = torch.tensor([cfg.loss_lambda.LAMBDA_adv, cfg.loss_lambda.LAMBDA_l1, cfg.loss_lambda.LAMBDA_perc,
+      #                              cfg.loss_lambda.LAMBDA_tv, cfg.loss_lambda.LAMBDA_style])
+    elif(cfg.adapt_weight == ""):
+      adapt_weights = torch.tensor([1,1,1,1])
+      #adapt_weights = torch.tensor([cfg.loss_lambda.LAMBDA_adv, cfg.loss_lambda.LAMBDA_l1, cfg.loss_lambda.LAMBDA_perc,
+      #                              cfg.loss_lambda.LAMBDA_tv, cfg.loss_lambda.LAMBDA_style])
     for step in tqdm(range(self.steps)):
+      if(cfg.adapt_weight == "SoftAdapt" and step != 0):
+        print(self.out_loss)
+        # loss_of_adv.append(self.out_loss[0])
+        loss_of_l1.append(self.out_loss[0])
+        loss_of_perc.append(self.out_loss[1])
+        loss_of_tv.append(self.out_loss[2])
+        loss_of_style.append(self.out_loss[3])
+        # Change 4: Make sure `epochs_to_make_change` have passed before calling SoftAdapt.
+        if step % epochs_to_make_updates == 0 and step != 0:
+          # print('list of loss: ',len(loss_of_adv))
+          adapt_weights = softadapt_object.get_component_weights(
+                                                                  torch.tensor(loss_of_l1), 
+                                                                  torch.tensor(loss_of_perc),
+                                                                  torch.tensor(loss_of_tv),
+                                                                  torch.tensor(loss_of_style),
+                                                                  verbose=True,
+                                                                  )
+          # Resetting the lists to start fresh (this part is optional)
+          # loss_of_adv = []
+          loss_of_l1 = []
+          loss_of_perc = []
+          loss_of_tv = []
+          loss_of_style = []
+
+      self.loss_lambda["LAMBDA_adv"] =  cfg.loss_lambda.LAMBDA_adv
+      self.loss_lambda["LAMBDA_l1"] =  cfg.loss_lambda.LAMBDA_l1
+      self.loss_lambda["LAMBDA_perc"] = adapt_weights[1]
+      self.loss_lambda["LAMBDA_tv"] = adapt_weights[2]
+      self.loss_lambda["LAMBDA_style"] =  adapt_weights[3]
       for i in tqdm(range(len(self.traingen))):
         [masked_images, masks], sample_labels = self.traingen[i]
         input_image = masked_images.astype('float32')
@@ -370,67 +407,42 @@ class train_main:
         if(cfg.model == 'p2p'):
           input_image = (input_image - 0.5)/0.5
           target = (target - 0.5)/0.5
-      out_loss = self.train_step(input_image,mask,target, step)
-      print(out_loss)
-      # if step == 0 and i == len(self.traingen) - 1: # for 1 pic/epoch
-      if step == 0 and i == 0: # for real training
-          if(cfg.ckpt_path != ''):
-            # print sum of initial weights for net
-            print("Init Model Weights:", 
-            sum([x.numpy().sum() for x in self.generator.weights]))
-            print(tf.train.latest_checkpoint(cfg.ckpt_path))
-            self.checkpoint.restore(tf.train.latest_checkpoint(cfg.ckpt_path)).assert_consumed()
-            print("Checkpoint Weights:", 
-            sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
-            # print sum of weights for p2p & checkpoint after attempting to restore saved net 
-            print("Restore Model Weights:", 
-            sum([x.numpy().sum() for x in self.generator.weights]))
-            print("Restored Checkpoint Weights:", 
-            sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
-            print("Done.")
-            # generator.load_weights(cfg.weightG) # 500
-          if(cfg.train_phase == 2 and not(cfg.cont)):
-            self.phase = 2
-        # self.plot_count = self.plot_count + 1
-        # for input_image, mask,target in zip(masked_images, masks, sample_labels):
-          # input_image = tf.expand_dims(input_image, axis=0)
-          # mask = tf.expand_dims(mask, axis=0)
-          # target = tf.expand_dims(target, axis=0)
-          # print(input_image.shape)
-      if(cfg.adapt_weight):
-        loss_of_adv.append(out_loss[0])
-        loss_of_l1.append(out_loss[1])
-        loss_of_perc.append(out_loss[2])
-        loss_of_tv.append(out_loss[3])
-        loss_of_style.append(out_loss[4])
-        # Change 4: Make sure `epochs_to_make_change` have passed before calling SoftAdapt.
-        if step % epochs_to_make_updates == 0 and step != 0:
-          adapt_weights = softadapt_object.get_component_weights(torch.tensor(loss_of_adv), 
-                                                                  torch.tensor(loss_of_l1), 
-                                                                  torch.tensor(loss_of_perc),
-                                                                  torch.tensor(loss_of_tv),
-                                                                  torch.tensor(loss_of_style),
-                                                                  verbose=False,
-                                                                  )
-          # Resetting the lists to start fresh (this part is optional)
-          loss_of_adv = []
-          loss_of_l1 = []
-          loss_of_perc = []
-          loss_of_tv = []
-          loss_of_style = []
-
-      self.loss_lambda["LAMBDA_adv"] = adapt_weights[0]
-      self.loss_lambda["LAMBDA_l1"] = adapt_weights[1]
-      self.loss_lambda["LAMBDA_perc"] = adapt_weights[2]
-      self.loss_lambda["LAMBDA_tv"] = adapt_weights[3]
-      self.loss_lambda["LAMBDA_style"] = adapt_weights[4]
-        
+        # NOTE: training env (test in gpu server) -----------------
+        self.out_loss = self.train_step(input_image,mask,target, step)
+        # print(out_loss)
+        # if step == 0 and i == len(self.traingen) - 1: # for 1 pic/epoch
+        if step == 0 and i == 0: # for real training
+            if(cfg.ckpt_path != ''):
+              # print sum of initial weights for net
+              print("Init Model Weights:", 
+              sum([x.numpy().sum() for x in self.generator.weights]))
+              print(tf.train.latest_checkpoint(cfg.ckpt_path))
+              self.checkpoint.restore(tf.train.latest_checkpoint(cfg.ckpt_path)).assert_consumed()
+              print("Checkpoint Weights:", 
+              sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
+              # print sum of weights for p2p & checkpoint after attempting to restore saved net 
+              print("Restore Model Weights:", 
+              sum([x.numpy().sum() for x in self.generator.weights]))
+              print("Restored Checkpoint Weights:", 
+              sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
+              print("Done.")
+              # generator.load_weights(cfg.weightG) # 500
+            if(cfg.train_phase == 2 and not(cfg.cont)):
+              self.phase = 2
+          # self.plot_count = self.plot_count + 1
+          # for input_image, mask,target in zip(masked_images, masks, sample_labels):
+            # input_image = tf.expand_dims(input_image, axis=0)
+            # mask = tf.expand_dims(mask, axis=0)
+            # target = tf.expand_dims(target, axis=0)
+            # print(input_image.shape)
+        # NOTE: ------------------------------------------------------------------
+      
       if (step) % 1 == 0:
         # display.clear_output(wait=True)
-
+        
         if step != 0:
           print(f'Time taken for 10 steps: {time.time()-start:.2f} sec | weight: {self.loss_lambda["LAMBDA_adv"]}, {self.loss_lambda["LAMBDA_l1"]}, {self.loss_lambda["LAMBDA_perc"]}, {self.loss_lambda["LAMBDA_tv"]}, {self.loss_lambda["LAMBDA_style"]} ')
-
+          
         start = time.time()
 
         ex_masked_images = tf.expand_dims(self.example_masked_images[0], axis=0)
@@ -480,9 +492,12 @@ def main(cfg):
 
     # main_dir = ''
     # list of training dataset
-    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/masks.txt'
-    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/input.txt'
-    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/output.txt'
+    # NOTE: test environment (test in GPU server) ------------------
+    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/masks.txt'
+    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/input.txt'
+    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/output.txt'
+    # NOTE: -----------------------------------
+
     # list of test dataset
     # train_config_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/config_zoom.txt'
     # train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/masks.txt'

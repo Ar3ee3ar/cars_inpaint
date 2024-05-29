@@ -4,6 +4,7 @@ venv/
 wandb/
 weight/
 */__pycache__
+__pycache__
 
 # test file
 test.py
@@ -19,3 +20,7 @@ logs/
 
 # dataset
 car_ds/
+
+# experiment data
+excel/
+
