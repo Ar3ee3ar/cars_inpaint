@@ -4,3 +4,9 @@
 [submodule "partial_conv/deepimageinpainting"]
 	path = partial_conv/deepimageinpainting
 	url = https://github.com/ayulockin/deepimageinpainting
+[submodule "segment/coco-conversion"]
+	path = segment/coco-conversion
+	url = https://github.com/TillBeemelmanns/cityscapes-to-coco-conversion
+[submodule "segment/lightning-sam"]
+	path = segment/lightning-sam
+	url = https://github.com/luca-medeiros/lightning-sam
