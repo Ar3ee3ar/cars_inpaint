@@ -407,34 +407,34 @@ class train_main:
         if(cfg.model == 'p2p'):
           input_image = (input_image - 0.5)/0.5
           target = (target - 0.5)/0.5
-        # NOTE: training env (test in gpu server) -----------------
-        self.out_loss = self.train_step(input_image,mask,target, step)
-        # print(out_loss)
-        # if step == 0 and i == len(self.traingen) - 1: # for 1 pic/epoch
-        if step == 0 and i == 0: # for real training
-            if(cfg.ckpt_path != ''):
-              # print sum of initial weights for net
-              print("Init Model Weights:", 
-              sum([x.numpy().sum() for x in self.generator.weights]))
-              print(tf.train.latest_checkpoint(cfg.ckpt_path))
-              self.checkpoint.restore(tf.train.latest_checkpoint(cfg.ckpt_path)).assert_consumed()
-              print("Checkpoint Weights:", 
-              sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
-              # print sum of weights for p2p & checkpoint after attempting to restore saved net 
-              print("Restore Model Weights:", 
-              sum([x.numpy().sum() for x in self.generator.weights]))
-              print("Restored Checkpoint Weights:", 
-              sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
-              print("Done.")
-              # generator.load_weights(cfg.weightG) # 500
-            if(cfg.train_phase == 2 and not(cfg.cont)):
-              self.phase = 2
-          # self.plot_count = self.plot_count + 1
-          # for input_image, mask,target in zip(masked_images, masks, sample_labels):
-            # input_image = tf.expand_dims(input_image, axis=0)
-            # mask = tf.expand_dims(mask, axis=0)
-            # target = tf.expand_dims(target, axis=0)
-            # print(input_image.shape)
+        # NOTE: training env (test in editor server) -----------------
+      self.out_loss = self.train_step(input_image,mask,target, step)
+      # print(out_loss)
+      # if step == 0 and i == len(self.traingen) - 1: # for 1 pic/epoch
+      if step == 0 and i == 0: # for real training
+          if(cfg.ckpt_path != ''):
+            # print sum of initial weights for net
+            print("Init Model Weights:", 
+            sum([x.numpy().sum() for x in self.generator.weights]))
+            print(tf.train.latest_checkpoint(cfg.ckpt_path))
+            self.checkpoint.restore(tf.train.latest_checkpoint(cfg.ckpt_path)).assert_consumed()
+            print("Checkpoint Weights:", 
+            sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
+            # print sum of weights for p2p & checkpoint after attempting to restore saved net 
+            print("Restore Model Weights:", 
+            sum([x.numpy().sum() for x in self.generator.weights]))
+            print("Restored Checkpoint Weights:", 
+            sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
+            print("Done.")
+            # generator.load_weights(cfg.weightG) # 500
+          if(cfg.train_phase == 2 and not(cfg.cont)):
+            self.phase = 2
+        # self.plot_count = self.plot_count + 1
+        # for input_image, mask,target in zip(masked_images, masks, sample_labels):
+          # input_image = tf.expand_dims(input_image, axis=0)
+          # mask = tf.expand_dims(mask, axis=0)
+          # target = tf.expand_dims(target, axis=0)
+          # print(input_image.shape)
         # NOTE: ------------------------------------------------------------------
       
       if (step) % 1 == 0:
@@ -492,10 +492,10 @@ def main(cfg):
 
     # main_dir = ''
     # list of training dataset
-    # NOTE: test environment (test in GPU server) ------------------
-    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/masks.txt'
-    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/input.txt'
-    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/test/output.txt'
+    # NOTE: val environment (test in editor server) ------------------
+    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/masks.txt'
+    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/input.txt'
+    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/output.txt'
     # NOTE: -----------------------------------
 
     # list of test dataset
@@ -517,12 +517,15 @@ def main(cfg):
     y_test = []
     mask_test = []
     image_size = (cfg.img_size,cfg.img_size)
-    input_model_size = [cfg.img_size,cfg.img_size,3]
+    if(cfg.crop_size > 0):
+      input_model_size = [cfg.crop_size,cfg.crop_size,3]
+    else:
+      input_model_size = [cfg.img_size,cfg.img_size,3]
 
-    if(cfg.inpaint_mode == 'per'):
+    if(cfg.inpaint_mode == 'mask'):
       train = Dataset(main_dir = main_dir,input_dir = train_input_dir,mask_dir = train_mask_dir,label_dir = train_label_dir,image_size = image_size)
       val = Dataset(main_dir = main_dir,input_dir = val_input_dir,mask_dir = val_mask_dir,label_dir = val_label_dir,image_size = image_size)
-    if(cfg.inpaint_mode == 'cube'):
+    if(cfg.inpaint_mode == 'non_mask'):
       train = Dataset(main_dir = main_dir,input_dir = train_input_dir,mask_dir=None,label_dir = train_label_dir,image_size = image_size)
       val = Dataset(main_dir = main_dir,input_dir = val_input_dir,mask_dir=None,label_dir = val_label_dir,image_size = image_size)
     x_train, y_train, mask_train = train.process_data()
@@ -538,13 +541,13 @@ def main(cfg):
     # mask_test = test.mask_ds
 
     if(cfg.random_car):
-      other_car_mask = prepare_other_car_mask(main_dir,image_size)
+      other_car_mask = prepare_other_car_mask(main_dir,image_size,other_car_list=cfg.other_car_list)
     else:
       other_car_mask = None
 
     ## Prepare training and testing mask-image pair generator (with discriminator)
-    traingen = createAugment(x_train, y_train, mask_train, batch_size=batch_size, dim=image_size, random_mask=cfg.random_mask, other_car_list=other_car_mask)
-    valgen = createAugment(x_val, y_val, mask_val, batch_size=batch_size, dim=image_size, random_mask=cfg.random_mask, other_car_list=other_car_mask)
+    traingen = createAugment(x_train, y_train, mask_train, batch_size=batch_size, dim=image_size,random_box=cfg.random_box, random_mask=cfg.random_mask, other_car_list=other_car_mask,crop_size=cfg.crop_size)
+    valgen = createAugment(x_val, y_val, mask_val, batch_size=batch_size, dim=image_size,random_box=cfg.random_box, random_mask=cfg.random_mask, other_car_list=other_car_mask,crop_size=cfg.crop_size)
 
     # testgen = createAugment(x_test, y_test,mask_test,batch_size=8,dim=(128,128), shuffle=False)
 
@@ -563,9 +566,9 @@ def main(cfg):
       # keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='new_pconv_128.png')
       discriminator = p2pD.Discriminator_con(input_shape=input_model_size)
     elif(cfg.model == 'p2p'):
-      generator = p2pG.Generator(input_shape=input_model_size)
+      generator = p2pG.dilated_Generator(input_shape=input_model_size)
       # keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='p2p_G_256.png')
-      discriminator = p2pD.Discriminator_con(input_shape=input_model_size)
+      discriminator = p2pD.dilated_Discriminator(input_shape=input_model_size)
       # tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=64, to_file='p2p_D_256.png')
 
     # define optimizer
