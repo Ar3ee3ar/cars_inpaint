@@ -103,7 +103,8 @@ def main(cfg_test):
     if(cfg_test.weightG != ''):
     #    print(cfg_test.weightG)
        generator.load_weights(cfg_test.weightG) # 500
-
+       
+    create_fol(main_dir+"test_img/"+name_folder)
     create_fol(main_dir+"test_img/"+name_folder+"/"+cfg_test.save_fol+"/"+cfg_test.ds_name)
     
     for count_num in count_list:
@@ -124,6 +125,10 @@ def main(cfg_test):
         coor["x"] = 27
       elif(cfg_test.ds_name == "i9-10"):
         img_path ="D:/new_car_ds/11-01/I9-10/Camera/img_"+str(count_num).rjust(6, '0')+".jpg" #"D:/inpaint_gan/test_img/pix2pix/new_512/26082024/140/"+str(count_num)+"_gan_inpaint.jpg" 
+        coor["x"] = 27
+      elif(cfg_test.ds_name == "upload"):
+        img_path = str(count_num)
+        count_num = img_path.split('/')[-1]
         coor["x"] = 27
       # print(img_path)
       count = str(count_num)
