@@ -20,7 +20,7 @@ from config_test_colab import cfg_test
 import pix2pix.Generator as p2pG
 import pix2pix.Discriminator as p2pD
 
-from partial_conv.generator import dice_coef, InpaintingModel
+# from partial_conv.generator import dice_coef, InpaintingModel
 
 from tools.utils import generate_images, wandb_log, view_test
 from tools.loss import discriminator_loss,generator_loss
@@ -241,7 +241,7 @@ def main(cfg_test):
       # normal inpaint -------------------
       # predict_image_norm = ((1 - mask_img_pano) * per_img_1000) + (mask_img_pano * predict_image_norm)
       # # seamless ----------------------
-      mask_path_seam = "car_ds/pic/mask/8k_focus_simple2.jpg"
+      mask_path_seam = "mask_colab/8k_focus_simple2.jpg"
 
       # project mask image
       mask_img_seam = cv2.resize(cv2.imread(mask_path_seam),(1000,1000)) # for model
