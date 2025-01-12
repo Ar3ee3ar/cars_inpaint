@@ -13,7 +13,8 @@ from PIL import Image
 import time
 
 from dataset import Dataset, createAugment
-from config_test import cfg_test
+# from config_test import cfg_test
+from config_test_colab import cfg_test
 # from partial_conv.generator import dice_coef, InpaintingModel
 # pix2pix
 import pix2pix.Generator as p2pG
@@ -89,11 +90,11 @@ def main(cfg_test):
 
     # initial generator model
     keras.backend.clear_session()
-    if(cfg_test.model_name == 'pconv'):
-      name_folder = "pconv"
-      # generator = InpaintingModel().prepare_model(input_size=input_model_size)
-      generator = InpaintingModel().build_pconv_unet(input_size=input_model_size,train_bn = True)
-    elif(cfg_test.model_name == 'p2p'):
+    # if(cfg_test.model_name == 'pconv'):
+    #   name_folder = "pconv"
+    #   # generator = InpaintingModel().prepare_model(input_size=input_model_size)
+    #   generator = InpaintingModel().build_pconv_unet(input_size=input_model_size,train_bn = True)
+    if(cfg_test.model_name == 'p2p'):
       name_folder = "pix2pix"
       generator = p2pG.Generator(input_shape=input_model_size)
     # generator = InpaintingModel().prepare_model(input_size=(128,128,3))
@@ -128,7 +129,7 @@ def main(cfg_test):
         coor["x"] = 27
       elif(cfg_test.ds_name == "upload"):
         img_path = str(count_num)
-        count_num = img_path.split('/')[-1]
+        count_num = (img_path.split('/')[-1]).split('.')[0]
         coor["x"] = 27
       # print(img_path)
       count = str(count_num)
