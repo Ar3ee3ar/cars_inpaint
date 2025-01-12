@@ -1,22 +1,39 @@
 import tensorflow as tf
 from tensorflow.keras import layers
 from tensorflow.keras.applications import vgg16
+# import sys
 
 from .process_img import preprocess_vgg
 
-# contextual encoder loss
-def generator_l1_loss(gen_output, target,loss_lambda):
-  LAMBDA_l1 = loss_lambda["LAMBDA_l1"]
+def L1_loss_equ(gen_output, target):
   l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
-  return LAMBDA_l1 * l1_loss
+  return l1_loss
+
+def L2_loss_equ(gen_output, target):
+  l2_loss = tf.reduce_mean(tf.square(target - gen_output))
+  return l2_loss
+
+# contextual encoder loss
+def reconstruction_loss(gen_output, target,loss_lambda,recon_loss):
+  LAMBDA_recon = loss_lambda["LAMBDA_recon"]
+  if(recon_loss == "L1"):
+    recon_loss = L1_loss_equ(gen_output, target)
+  elif(recon_loss == "L2"):
+    recon_loss = L2_loss_equ(gen_output, target)
+  else:
+    print('Wrong type of reconstruction loss')
+    exit()
+  total_gen_loss = LAMBDA_recon * recon_loss
+
+  return total_gen_loss, recon_loss
 
 
 # generator with adversarial loss   
-def generator_loss(disc_generated_output, gen_output, target,loss_lambda):
+def generator_loss(disc_generated_output, gen_output, target,loss_lambda,recon_loss):
   # L1 Loss
   ## L-hole: l1{elementwise[(1-mask),(out-gt)]}
   ## L-valid: l1{elementwise[(mask),(out-gt)]}
-  LAMBDA_l1 = loss_lambda["LAMBDA_l1"]
+  LAMBDA_recon = loss_lambda["LAMBDA_recon"]
 
   loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
   gan_loss = loss_object(tf.ones_like(disc_generated_output), disc_generated_output) # adversarial loss
@@ -25,12 +42,16 @@ def generator_loss(disc_generated_output, gen_output, target,loss_lambda):
   # print('target type: ',target)
   # print('gen_output type: ',gen_output)
 
-  l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
-  
+  if(recon_loss == "L1"):
+    recon_loss = L1_loss_equ(gen_output, target)
+  elif(recon_loss == "L2"):
+    recon_loss = L2_loss_equ(gen_output, target)
+  else:
+    print('Wrong type of reconstruction loss')
+    exit()
+  total_gen_loss = gan_loss + (LAMBDA_recon * recon_loss)
 
-  total_gen_loss = gan_loss + (LAMBDA_l1 * l1_loss)
-
-  return total_gen_loss, gan_loss, l1_loss
+  return total_gen_loss, gan_loss, recon_loss
 
 # perceptual loss ----------------------------------
 class LossNetwork(tf.keras.models.Model):
@@ -110,10 +131,14 @@ class StyleContentModel(tf.keras.models.Model):
 
     return {'content': content_dict, 'style': style_dict}
 
-def style_content_loss(gen_img,real_img):
+def style_content_loss(gen_img,real_img,recon_loss):
     # variable -------------------
     # content_weight=1e4
-    content_layers = ['block5_conv2']
+
+    content_layers = ['block1_conv2',
+                      'block2_conv2',
+                      'block3_conv3',
+                      'block4_conv3']
 
     style_layers = ['block1_conv1',
                     'block2_conv1',
@@ -121,29 +146,37 @@ def style_content_loss(gen_img,real_img):
                     'block4_conv1', 
                     'block5_conv1']
 
-    # num_content_layers = len(content_layers)
+    num_content_layers = len(content_layers)
     num_style_layers = len(style_layers)
     # -------------------------------------------
     extractor = StyleContentModel(style_layers, content_layers)
     outputs = extractor(gen_img)
     style_targets = extractor(real_img)['style']
-    # content_targets = extractor(real_img)['content']
+    content_targets = extractor(real_img)['content']
 
 
     style_outputs = outputs['style']
-    # content_outputs = outputs['content']
-    style_loss = tf.add_n([tf.reduce_mean(tf.abs(style_outputs[name]-style_targets[name])) 
-                           for name in style_outputs.keys()]) #L1
-    # style_loss = tf.add_n([tf.reduce_mean((style_outputs[name]-style_targets[name])**2) 
-    #                        for name in style_outputs.keys()]) #MSE
+    content_outputs = outputs['content']
+    if(recon_loss == "L1"):
+      style_loss = tf.add_n([tf.reduce_mean(tf.abs(style_outputs[name]-style_targets[name])) 
+                            for name in style_outputs.keys()]) #L1
+      content_loss = tf.add_n([tf.reduce_mean(tf.abs(content_outputs[name]-content_targets[name])) 
+                            for name in content_outputs.keys()]) #L1
+    elif(recon_loss == "L2"):
+      style_loss = tf.add_n([tf.reduce_mean((style_outputs[name]-style_targets[name])**2) 
+                           for name in style_outputs.keys()]) #L2
+      content_loss = tf.add_n([tf.reduce_mean((content_outputs[name]-content_targets[name])**2) 
+                           for name in content_outputs.keys()]) #L2
+      
     style_loss = style_loss / num_style_layers
-    loss = style_loss
+    content_loss = content_loss / num_content_layers
+    # loss = style_loss
 
     # content_loss = tf.add_n([tf.reduce_mean((content_outputs[name]-content_targets[name])**2) 
     #                          for name in content_outputs.keys()])
     # content_loss *= content_weight / num_content_layers
     # loss = style_loss + content_loss
-    return loss
+    return style_loss, content_loss
 
 # -----------------------------------------------------------------------------------------------------
 # ---------------------total variation loss -----------------------------
@@ -159,7 +192,7 @@ def total_variation_loss(image):
 # --------------------------------------------------------------------------
 
 
-def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inpaint_img,mask, target, loss_type = 'pconv', loss_lambda={}):
+def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inpaint_img,mask, target, loss_type = 'pconv', loss_lambda={}, recon_loss="L1"):
   LAMBDA_adv = loss_lambda["LAMBDA_adv"]
   LAMBDA_perc = loss_lambda["LAMBDA_perc"]
   LAMBDA_tv = loss_lambda["LAMBDA_tv"]
@@ -201,28 +234,35 @@ def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inp
   real_img = preprocess_vgg(target)
 
 
-  perc_loss_out = perceptual_loss(out_img,real_img)
-  perc_loss_comp = perceptual_loss(comp_img,real_img)
-  perc_loss = perc_loss_comp + perc_loss_out
+  # perc_loss_out = perceptual_loss(out_img,real_img)
+  # perc_loss_comp = perceptual_loss(comp_img,real_img)
+  # perc_loss = perc_loss_comp + perc_loss_out
   # print(perc_loss)
   # perc_loss = 1e-6*(sum(sum(sum(perc_loss))))
   # perc_loss= 0
   # ---------------------------------------------------------
   # style_content loss --------------------------------
-  style_loss_out = style_content_loss(out_img,real_img)
-  style_loss_comp = style_content_loss(comp_img,real_img)
+  style_loss_out, perc_loss_out = style_content_loss(out_img,real_img,recon_loss)
+  style_loss_comp, perc_loss_comp = style_content_loss(comp_img,real_img,recon_loss)
   style_loss =  style_loss_out + style_loss_comp
+  perc_loss = perc_loss_comp + perc_loss_out
   # print(style_loss)
   # ----------------------------------------------------
   # total variation loss-------------------------------
   tv_loss =  total_variation_loss(inpaint_img)
   #---------------------------------------------------
   # L1 loss --------------------------------------------
-  l1_loss_hole = tf.reduce_mean(tf.abs(((1 - mask) * predict_img) - ((1 - mask) * target)))
-  l1_loss_valid = tf.reduce_mean(tf.abs((mask * predict_img) - (mask * target)))
+  if(recon_loss == "L1"):
+    recon_hole = L1_loss_equ(((1 - mask) * predict_img),((1 - mask) * target))
+    recon_valid = L1_loss_equ((mask * predict_img),(mask * target))
+  elif(recon_loss == "L2"):
+    recon_hole = L2_loss_equ(((1 - mask) * predict_img),((1 - mask) * target))
+    recon_valid = L2_loss_equ((mask * predict_img),(mask * target))
+  # l1_loss_hole = tf.reduce_mean(tf.abs(((1 - mask) * predict_img) - ((1 - mask) * target)))
+  # l1_loss_valid = tf.reduce_mean(tf.abs((mask * predict_img) - (mask * target)))
 
-  loss_hole = l1_loss_hole
-  loss_valid =  l1_loss_valid
+  loss_hole = recon_hole
+  loss_valid =  recon_valid
   # ------------------------------------------------------------------
   if(loss_type == 'pconv'):
     total_disc_loss = (LAMBDA_adv * adv_loss) + (LAMBDA_perc * perc_loss) + (LAMBDA_style * style_loss) + (LAMBDA_tv * tv_loss) + (LAMBDA_hole * loss_hole) + (LAMBDA_valid * loss_valid)
@@ -233,3 +273,63 @@ def discriminator_loss(disc_real_output, disc_generated_output, predict_img, inp
     return total_disc_loss
   else:
      return "wrong type"
+# ---------------------------------------------------------
+
+# Modified Generator loss (for L1)------------------------------------------------------------
+def modified_generator_loss(predict_img, inpaint_img,mask, target, loss_type = 'pconv', loss_lambda={}, recon_loss="L1"):
+  LAMBDA_recon = loss_lambda["LAMBDA_recon"]
+  LAMBDA_perc = loss_lambda["LAMBDA_perc"]
+  LAMBDA_tv = loss_lambda["LAMBDA_tv"]
+  LAMBDA_hole = loss_lambda["LAMBDA_hole"]
+  LAMBDA_valid = loss_lambda["LAMBDA_valid"]
+  LAMBDA_style =loss_lambda["LAMBDA_style"]
+
+  # perceptual loss -----------------------------------------
+  # tf.convert_to_tensor(inpaint_img, dtype=tf.float32)
+  # gen_img = tf.convert_to_tensor([tf.image.resize(x, [224,224], method='bilinear') for x in inpaint_img], dtype=tf.float32)
+  # real_img = tf.convert_to_tensor([tf.image.resize(x, [224,224], method='bilinear') for x in target], dtype=tf.float32)
+  out_img = preprocess_vgg(predict_img)
+  comp_img = preprocess_vgg(inpaint_img)
+  real_img = preprocess_vgg(target)
+
+
+  # perc_loss_out = perceptual_loss(out_img,real_img)
+  # perc_loss_comp = perceptual_loss(comp_img,real_img)
+  # perc_loss = perc_loss_comp + perc_loss_out
+  # print(perc_loss)
+  # perc_loss = 1e-6*(sum(sum(sum(perc_loss))))
+  # perc_loss= 0
+  # ---------------------------------------------------------
+  # style_content loss --------------------------------
+  style_loss_out, perc_loss_out = style_content_loss(out_img,real_img,recon_loss)
+  style_loss_comp, perc_loss_comp = style_content_loss(comp_img,real_img,recon_loss)
+  style_loss =  style_loss_out + style_loss_comp
+  perc_loss = perc_loss_comp + perc_loss_out
+  # print(style_loss)
+  # ----------------------------------------------------
+  # total variation loss-------------------------------
+  tv_loss =  total_variation_loss(inpaint_img)
+  #---------------------------------------------------
+  # L1 loss --------------------------------------------
+  if(recon_loss == "L1"):
+    recon_hole = L1_loss_equ(((1 - mask) * predict_img),((1 - mask) * target))
+    recon_valid = L1_loss_equ((mask * predict_img),(mask * target))
+    recon_whole = L1_loss_equ(predict_img,target)
+  elif(recon_loss == "L2"):
+    recon_hole = L2_loss_equ(((1 - mask) * predict_img),((1 - mask) * target))
+    recon_valid = L2_loss_equ((mask * predict_img),(mask * target))
+    recon_whole = L2_loss_equ(predict_img,target)
+  # l1_loss_hole = tf.reduce_mean(tf.abs(((1 - mask) * predict_img) - ((1 - mask) * target)))
+  # l1_loss_valid = tf.reduce_mean(tf.abs((mask * predict_img) - (mask * target)))
+
+  loss_hole = recon_hole
+  loss_valid =  recon_valid
+  # ------------------------------------------------------------------
+  if(loss_type == "recon"):
+    total_gen_loss = (LAMBDA_recon * recon_whole)
+    return total_gen_loss, recon_whole
+  elif(loss_type == "modify"):
+    total_gen_loss = (LAMBDA_recon * recon_whole)+(LAMBDA_perc * perc_loss) + (LAMBDA_style * style_loss) + (LAMBDA_tv * tv_loss) + (LAMBDA_hole * loss_hole) + (LAMBDA_valid * loss_valid)
+    return total_gen_loss,recon_whole, perc_loss, style_loss, tv_loss, loss_hole, loss_valid
+  else:
+    return ("wrong loss type")

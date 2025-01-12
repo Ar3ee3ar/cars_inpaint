@@ -1,6 +1,7 @@
 car_ds/
 logs/
 venv/
+*/venv/
 wandb/
 weight/
 */__pycache__

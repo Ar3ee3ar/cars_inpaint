@@ -62,10 +62,11 @@ def generate_images(model, test_input,mask, tar,model_name, log=True):
 def wandb_log(cfg):
   dotenv_path = join(dirname(__file__), '.env')
   load_dotenv(dotenv_path)
+  print(os.environ.get('WANDB_KEYS'),' ',os.environ.get('WANDB_ENTITY'),' ',os.environ.get('WANDB_PROJECT'))
   wandb.login(key=os.environ.get('WANDB_KEYS'))
   # initial wandb log
   wandb.tensorboard.patch(root_logdir="")
-  wandb.init(entity='arzeezar-l', project="img_inpaint", sync_tensorboard=True, config=cfg)
+  wandb.init(entity=os.environ.get('WANDB_ENTITY'), project=os.environ.get('WANDB_PROJECT'), sync_tensorboard=True, config=cfg)
   return wandb.run.dir
 
 @tf.function

@@ -4,20 +4,22 @@ from tensorflow import keras
 from tqdm import tqdm
 import tensorflow as tf
 
-from tools.process_img import preprocess_img, move_img, flip_img, zoom_img
+from tools.process_img import preprocess_img, move_img, flip_img, zoom_img, crop_center
 
 
 ## Ref: https://stanford.edu/~shervine/blog/keras-how-to-generate-data-on-the-fly.
 class createAugment(keras.utils.Sequence):
   'Generates data for Keras'
   def __init__(self, X, y,mask_ds, batch_size=8, dim=(32, 32), n_channels=3, 
-               shuffle=True, random_mask = False, random_box = False,  
-               crop_size = 0, other_car_list = None):
+               shuffle=True, random_mask = False, random_box = False, random_rotate = False,
+               crop_size = 0, crop_method = "", other_car_list = None, training= True):
       'Initialization'
       self.batch_size = batch_size
       self.X = X/255.0
       self.y = y/255.0
       if mask_ds is not None:
+        # mask_ds[mask_ds>0] = 255.0
+        # mask_ds[mask_ds<=0] = 0.0
         self.mask_ds = mask_ds/255.0
       else:
         self.mask_ds = mask_ds
@@ -25,8 +27,11 @@ class createAugment(keras.utils.Sequence):
       self.n_channels = n_channels
       self.shuffle = shuffle
       self.crop_size = crop_size
+      self.crop_method = crop_method
       self.random_mask = random_mask
-      self.random_box = random_mask
+      self.random_box = random_box
+      self.random_rotate = random_rotate
+      self.training = training
       if other_car_list is not None:
         self.random_car = True
         self.other_car_list = other_car_list/255.0
@@ -54,12 +59,12 @@ class createAugment(keras.utils.Sequence):
       if self.shuffle:
           np.random.shuffle(self.indexes)
 
-  def random_crop(self,input_image,mask, real_image):
-    stacked_image = tf.stack([input_image,mask, real_image], axis=0)
+  def random_crop(self,input_image, real_image):
+    stacked_image = tf.stack([input_image, real_image], axis=0)
     cropped_image = tf.image.random_crop(
-        stacked_image, size=[3, self.crop_size, self.crop_size, 3])
+        stacked_image, size=[2, self.crop_size, self.crop_size, 3])
 
-    return cropped_image[0], cropped_image[1], cropped_image[2]
+    return cropped_image[0], cropped_image[1]
 
   def __data_generation(self, idxs):
     if(self.crop_size <= 0):
@@ -80,19 +85,39 @@ class createAugment(keras.utils.Sequence):
 
     ## Iterate through random indexes
     for i, idx in enumerate(idxs):
-      image_copy = self.X[idx].copy()
+      if(self.training):
+        if(self.training or self.random_rotate):
+            rand_rotate = np.random.randint(1, 4)
+            image_copy = tf.image.rot90(self.X[idx].copy(), k=rand_rotate)
+            real_img_copy = tf.image.rot90(self.y[idx].copy(), k=rand_rotate)
+            input_img = image_copy
+            real_img = real_img_copy
+        else:
+            input_img =  self.X[idx].copy()
+            real_img = self.y[idx].copy()
+        
+        if(self.crop_size > 0):
+            if(self.crop_method == "random"):
+                input_img, real_img = self.random_crop(input_img, real_img)
+            elif(self.crop_method == "center"):
+                input_img = crop_center(input_img,(self.crop_size,self.crop_size))
+                real_img = crop_center(real_img,(self.crop_size,self.crop_size))
+            else:
+                input_img = input_img
+                real_img = real_img
+
+        if(bool(np.random.randint(0, 2))):
+                # Random mirroring
+                input_img = tf.image.flip_left_right(input_img)
+                real_img = tf.image.flip_left_right(real_img)
+      else:
+        input_img =  self.X[idx].copy()
+        real_img = self.y[idx].copy()
 
       ## Get mask associated to that image
-      masked_image, mask = self.__createMask(image_copy,idx)
+      masked_image, mask_img = self.__createMask(input_img,idx)
 
-      if(self.crop_size > 0):
-        input_img, mask_img, real_img = self.random_crop(masked_image, mask,self.y[idx])
-      else:
-         input_img = masked_image
-         mask_img = mask
-         real_img = self.y[idx]
-
-      Masked_images[i,] = input_img
+      Masked_images[i,] = masked_image
       Mask_batch[i,] = mask_img
       y_batch[i] = real_img
 
@@ -103,17 +128,25 @@ class createAugment(keras.utils.Sequence):
   def __createMask(self, img, idx):
     ## Prepare masking matrix
     if(self.mask_ds is not None):
-        mask = self.mask_ds[idx]
+        if(self.crop_size > 0):
+            mask = cv2.resize(self.mask_ds[idx], (self.dim[0],self.dim[1]))
+            mask[mask != 1] = 0
+        else:
+            mask = self.mask_ds[idx]
     elif(self.mask_ds is None):
         mask = np.full((self.dim[0],self.dim[1],3), 1.0, np.float32) ## White background
     if(self.random_car):
         for _ in range(np.random.randint(1, 3)):
             other_car = self.other_car_list[np.random.randint(0, len(self.other_car_list))]
-            if(bool(np.random.randint(0, 1))): # move_img
+            if(self.crop_size > 0):
+                other_car = cv2.resize(other_car, (self.crop_size,self.crop_size))
+            else:
+                other_car = other_car
+            if(bool(np.random.randint(0, 2))): # move_img
                 other_car = move_img(other_car,np.random.randint(-50, 50),np.random.randint(0, 50))
-            if(bool(np.random.randint(0, 1))): # zoom
+            if(bool(np.random.randint(0, 2))): # zoom
                 other_car = zoom_img(other_car, zoom_factor=np.random.uniform(0.5,2.0))
-            if(bool(np.random.randint(0, 1))): # flip
+            if(bool(np.random.randint(0, 2))): # flip
                 other_car = flip_img(other_car)
             mask = mask + other_car
             mask = (mask > 1).astype(np.float32)
@@ -121,11 +154,11 @@ class createAugment(keras.utils.Sequence):
     if(self.random_box):
         for _ in range(np.random.randint(1,3)):
             # random width and height of rectangle
-            rect_width = np.random.randint(20,70)
+            rect_width = np.random.randint(20,70)  # real_mask = (w,h) = (119,291)
             rect_height = np.random.randint(20,120)
             # set center point
-            cx = np.random.randint(1, other_car.shape[0])
-            cy = np.random.randint(1, other_car.shape[1])
+            cx = np.random.randint(1, self.dim[0])
+            cy = np.random.randint(1, self.dim[1])
             # Get random x locations to start line
             x1,x2 = cx -rect_width, cx +rect_width
             # Get random y locations to start line
@@ -169,6 +202,7 @@ class createAugment(keras.utils.Sequence):
     # mask = self.mask_ds[idx]
     ## Mask the image
     # masked_image = img.copy()
+    # mask[mask != 0] = 1
     masked_image = mask * img + (1 - mask) * 1.0
     # masked_image[mask==0] = 255 #bitwise
     # masked_image[mask==255] = 255 # original
@@ -202,6 +236,8 @@ class Dataset:
                     # print(line.strip())
                     img = preprocess_img(self.main_dir+ line.strip(),self.image_size)
                     img = cv2.bitwise_not(img)
+                    # img[img>0] = 255
+                    # img[img<=0] = 0
                     self.mask_ds.append(img)
             self.mask_ds = np.array(self.mask_ds).astype('float32')
         else:
@@ -217,13 +253,14 @@ class Dataset:
         return(self.input_ds,self.label_ds,self.mask_ds)
     
 def prepare_other_car_mask(main_dir,image_size,other_car_list=['random_car.txt']):
-    other_car_list = []
+    other_car_pic = []
     for car_name in other_car_list:
         with open(main_dir + 'car_ds/train_test_config/'+car_name) as f:
             for count, line in enumerate(f):
                 img = preprocess_img(line.strip(),image_size)
                 img = cv2.bitwise_not(img)
-                other_car_list.append(img)
-    other_car_list = np.array(other_car_list).astype('float32')
+                other_car_pic.append(img)
+    other_car_pic = np.array(other_car_pic).astype('float32')
+    print(len(other_car_pic))
 
-    return other_car_list
+    return other_car_pic

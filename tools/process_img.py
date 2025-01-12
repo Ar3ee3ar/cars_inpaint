@@ -32,6 +32,16 @@ def crop_center(image,new_img_size=(190,290)): # new_width=190,new_height=290
   crop_img = image[int(y):int(y+new_height), int(x):int(x+new_width)]
   return crop_img
 
+def crop_center_position(image,new_img_size=(190,290),move_x=0,move_y=0): # new_width=190,new_height=290
+  center = image.shape
+  new_width = new_img_size[0]
+  new_height = new_img_size[1]
+  x = (center[1]/2 - new_width/2) + move_x
+  y = (center[0]/2 - new_height/2) + move_y
+
+  crop_img = image[int(y):int(y+new_height), int(x):int(x+new_width)]
+  return crop_img
+
 def resize(img,new_width,new_height):
    resize_img = cv2.resize(img, [new_width,new_height], interpolation = cv2.INTER_AREA)
    return resize_img

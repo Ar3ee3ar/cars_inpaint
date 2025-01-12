@@ -14,13 +14,14 @@ from tqdm import tqdm
 from box import Box
 import torch
 from softadapt import SoftAdapt, NormalizedSoftAdapt, LossWeightedSoftAdapt
+from collections import deque
 
 from dataset import Dataset, createAugment, prepare_other_car_mask
 from partial_conv.generator import InpaintingModel
 # from partial_conv.generator import dice_coef, InpaintingModel
 # from partial_conv.discriminator import Discriminator
 from tools.utils import wandb_log, view_test
-from tools.loss import discriminator_loss,generator_loss, generator_l1_loss
+from tools.loss import discriminator_loss,generator_loss, reconstruction_loss, modified_generator_loss
 from tools.metrics import metrics
 # from tools.SoftAdapt.softadapt import SoftAdapt, NormalizedSoftAdapt, LossWeightedSoftAdapt
 from config import cfg
@@ -67,7 +68,7 @@ class train_main:
   def __init__(self,traingen,valgen,generator,generator_optimizer,discriminator,discriminator_optimizer,
                example_masked_images,example_masks,example_sample_labels,
                checkpoint,checkpoint_prefix,summary_writer,
-               steps, logs=None):
+               steps, early_stopping,logs=None, recon_loss = "L1"):
     # dataset
     self.traingen = traingen
     self.valgen = valgen
@@ -86,6 +87,8 @@ class train_main:
     self.summary_writer = summary_writer
     # training step
     self.steps = steps
+    # early stopping count
+    self.early_stopping = early_stopping
     # log path
     self.logs = logs
     # plot count (for loss graph)
@@ -97,11 +100,20 @@ class train_main:
     if(cfg.cont):
       self.phase = cfg.train_phase
     else:
-      self.phase = 2
+      self.phase = 1
     # store lambda loss
-    self.loss_lambda = {
+    self.loss_lambda_G = {
+        "LAMBDA_adv": cfg.loss_lambda.G.LAMBDA_adv,
+        "LAMBDA_recon": cfg.loss_lambda.G.LAMBDA_recon,
+        "LAMBDA_perc": cfg.loss_lambda.G.LAMBDA_perc,
+        "LAMBDA_tv": cfg.loss_lambda.G.LAMBDA_tv,
+        "LAMBDA_hole": cfg.loss_lambda.G.LAMBDA_hole,
+        "LAMBDA_valid": cfg.loss_lambda.G.LAMBDA_valid,
+        "LAMBDA_style": cfg.loss_lambda.G.LAMBDA_style
+    }
+    self.loss_lambda_D = {
         "LAMBDA_adv": 1,
-        "LAMBDA_l1": 1,
+        "LAMBDA_recon": 1,
         "LAMBDA_perc": 1,
         "LAMBDA_tv": 1,
         "LAMBDA_hole": 0,
@@ -110,6 +122,8 @@ class train_main:
     }
     # store training loss
     self.out_loss = [0,0,0,0]
+    # reconstruction loss type
+    self.recon_loss = recon_loss
 
     self.fit()
 
@@ -157,19 +171,28 @@ class train_main:
         #   plt.axis('off')
         # #plt.imshow(inpaint_img[0])
         # plt.savefig('test_save_train.png')
-        gen_l1_loss = generator_l1_loss(gen_output, target,loss_lambda= self.loss_lambda)
-        
-        self.model_gan_loss = gen_l1_loss
+        if(cfg.loss_type.G == "recon"):
+          total_gen_loss, recon_loss = reconstruction_loss(gen_output, target,loss_lambda= self.loss_lambda_G,recon_loss=self.recon_loss["G"])
+        elif(cfg.loss_type.G == "modify"):
+          total_gen_loss, recon_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = modified_generator_loss(gen_output,inpaint_img,mask, target,loss_type=cfg.loss_type.G,loss_lambda= self.loss_lambda_G,recon_loss=self.recon_loss["G"])
+        self.model_gan_loss = recon_loss
 
-      generator_gradients = gen_tape.gradient(gen_l1_loss,
+      generator_gradients = gen_tape.gradient(total_gen_loss,
                                               self.generator.trainable_variables)
 
       self.generator_optimizer.apply_gradients(zip(generator_gradients,
                                               self.generator.trainable_variables))
       with self.summary_writer.as_default():
-        tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=step)
+        tf.summary.scalar('recon_loss', recon_loss, step=step)
+        if(cfg.train_phase == 1 and cfg.loss_type.G == "modify"):
+          tf.summary.scalar('recon_hole_loss', hole_loss, step=step)
+          tf.summary.scalar('recon_valid_loss', valid_loss, step=step)
+          tf.summary.scalar('perc_loss', perc_loss, step=step)
+          tf.summary.scalar('style_loss', style_loss, step=step)
+          tf.summary.scalar('total_variation_loss', tv_loss, step=step)
+
         # print('plot non-D')
-      return [gen_l1_loss]
+      return [recon_loss]
     elif(self.phase == 2):
       with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
         # print('start phase 2')
@@ -219,14 +242,14 @@ class train_main:
         # disc_real_output = self.discriminator( target, training=True)
         # disc_generated_output = self.discriminator( gen_output, training=True)
 
-        if(cfg.loss_type == 'pconv'):
-          gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target,loss_lambda= self.loss_lambda)
-          disc_total_loss, disc_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target, loss_type = cfg.loss_type, loss_lambda= self.loss_lambda)
-        elif(cfg.loss_type == 'p2p'):
-          gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target,loss_lambda= self.loss_lambda)
-          disc_total_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target, loss_type = cfg.loss_type,loss_lambda= self.loss_lambda)
+        if(cfg.loss_type.D == 'pconv'):
+          gen_total_loss, gen_gan_loss, gen_recon_loss = generator_loss(disc_generated_output, gen_output, target,loss_lambda= self.loss_lambda_G,recon_loss=self.recon_loss["G"])
+          disc_total_loss, disc_loss, perc_loss, style_loss, tv_loss, hole_loss, valid_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target, loss_type = cfg.loss_type.D, loss_lambda= self.loss_lambda_D,recon_loss=self.recon_loss["D"])
+        elif(cfg.loss_type.D == 'p2p'):
+          gen_total_loss, gen_gan_loss, gen_recon_loss = generator_loss(disc_generated_output, gen_output, target,loss_lambda= self.loss_lambda_G,recon_loss=self.recon_loss["G"])
+          disc_total_loss = discriminator_loss(disc_real_output, disc_generated_output, gen_output,inpaint_img,mask, target, loss_type = cfg.loss_type.D,loss_lambda= self.loss_lambda_D,recon_loss=self.recon_loss["D"])
         
-        self.model_gan_loss = gen_l1_loss
+        self.model_gan_loss = gen_recon_loss
 
 
       generator_gradients = gen_tape.gradient(gen_total_loss,
@@ -241,26 +264,26 @@ class train_main:
 
       with self.summary_writer.as_default():
         tf.summary.scalar('gen_total_loss', gen_total_loss, step=step)
-        tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=step)
+        tf.summary.scalar('gen_recon_loss', gen_recon_loss, step=step)
         tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step)
         tf.summary.scalar('disc_total_loss', disc_total_loss, step=step)
-        if(cfg.loss_type == 'pconv'):
+        if(cfg.loss_type.D == 'pconv'):
           tf.summary.scalar('disc_loss', disc_loss, step=step)
-          tf.summary.scalar('l1_hole_loss', hole_loss, step=step)
-          tf.summary.scalar('l1_valid_loss', valid_loss, step=step)
+          tf.summary.scalar('recon_hole_loss', hole_loss, step=step)
+          tf.summary.scalar('recon_valid_loss', valid_loss, step=step)
           tf.summary.scalar('perc_loss', perc_loss, step=step)
           tf.summary.scalar('style_loss', style_loss, step=step)
           tf.summary.scalar('total_variation_loss', tv_loss, step=step)
-        tf.summary.scalar('lambda_adv', self.loss_lambda["LAMBDA_adv"], step=step)
-        tf.summary.scalar('lambda_l1', self.loss_lambda["LAMBDA_l1"], step=step)
-        tf.summary.scalar('lambda_perc', self.loss_lambda["LAMBDA_perc"], step=step)
-        tf.summary.scalar('lambda_tv', self.loss_lambda["LAMBDA_tv"], step=step)
-        tf.summary.scalar('lambda_style', self.loss_lambda["LAMBDA_style"], step=step)
+        tf.summary.scalar('lambda_adv', self.loss_lambda_D["LAMBDA_adv"], step=step)
+        tf.summary.scalar('lambda_recon', self.loss_lambda_D["LAMBDA_recon"], step=step)
+        tf.summary.scalar('lambda_perc', self.loss_lambda_D["LAMBDA_perc"], step=step)
+        tf.summary.scalar('lambda_tv', self.loss_lambda_D["LAMBDA_tv"], step=step)
+        tf.summary.scalar('lambda_style', self.loss_lambda_D["LAMBDA_style"], step=step)
         # print('plot D')
         # tf.summary.image("input img", input_image, step=step//10)
         # tf.summary.image("predict img", gen_output, step=step//10)
         # tf.summary.image("inpaint img", inpaint_img, step=step//10)
-      return [gen_l1_loss.numpy(), perc_loss.numpy(), tv_loss.numpy(), style_loss.numpy()]
+      return [gen_recon_loss.numpy(), perc_loss.numpy(), tv_loss.numpy(), style_loss.numpy()]
 
 
   def save_model(self,step):
@@ -338,15 +361,23 @@ class train_main:
       psnr = psnr + metrics_value.psnr()
       ssim = ssim + metrics_value.ssim()
     
+    val_L1 = l1_loss/len(self.valgen)
+    val_L2 = l2_loss/len(self.valgen)
+    val_psnr = psnr/len(self.valgen)
+    val_ssim = ssim/len(self.valgen)
+    
     with self.summary_writer.as_default():
-      tf.summary.scalar('val_L1_loss', l1_loss/len(self.valgen), step=step)
-      tf.summary.scalar('val_L2_loss', l2_loss/len(self.valgen), step=step)
-      tf.summary.scalar('val_psnr', psnr/len(self.valgen), step=step)
-      tf.summary.scalar('val_ssim', ssim/len(self.valgen), step=step)
+      tf.summary.scalar('val_L1_loss', val_L1, step=step)
+      tf.summary.scalar('val_L2_loss', val_L2, step=step)
+      tf.summary.scalar('val_psnr', val_psnr, step=step)
+      tf.summary.scalar('val_ssim', val_ssim, step=step)
+
+    return val_L1, val_L2, val_psnr, val_ssim
 
   def fit(self):
     # for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
     start = time.time()
+    loss_history = deque(maxlen=self.early_stopping + 1)
 
     if(cfg.adapt_weight == "SoftAdapt"):
       # Change 1: Create a SoftAdapt object (with your desired variant)
@@ -357,7 +388,7 @@ class train_main:
 
       # Change 3: Initialize lists to keep track of loss values over the epochs we defined above
       # loss_of_adv = []
-      loss_of_l1 = []
+      loss_of_recon = []
       loss_of_perc = []
       loss_of_tv = []
       loss_of_style = []
@@ -366,14 +397,15 @@ class train_main:
       #adapt_weights = torch.tensor([cfg.loss_lambda.LAMBDA_adv, cfg.loss_lambda.LAMBDA_l1, cfg.loss_lambda.LAMBDA_perc,
       #                              cfg.loss_lambda.LAMBDA_tv, cfg.loss_lambda.LAMBDA_style])
     elif(cfg.adapt_weight == ""):
-      adapt_weights = torch.tensor([1,1,1,1])
-      #adapt_weights = torch.tensor([cfg.loss_lambda.LAMBDA_adv, cfg.loss_lambda.LAMBDA_l1, cfg.loss_lambda.LAMBDA_perc,
-      #                              cfg.loss_lambda.LAMBDA_tv, cfg.loss_lambda.LAMBDA_style])
+      # adapt_weights = torch.tensor([1,1,1,1])
+      adapt_weights = torch.tensor([cfg.loss_lambda.D.LAMBDA_recon, cfg.loss_lambda.D.LAMBDA_perc,
+                                   cfg.loss_lambda.D.LAMBDA_tv, cfg.loss_lambda.D.LAMBDA_style])
     for step in tqdm(range(self.steps)):
-      if(cfg.adapt_weight == "SoftAdapt" and step != 0):
+      # if(cfg.adapt_weight == "SoftAdapt" and step > 1 and self.phase==2): # testing environment (continue from phase 1)
+      if(cfg.adapt_weight == "SoftAdapt" and step != 0 and self.phase==2): # training environment
         print(self.out_loss)
         # loss_of_adv.append(self.out_loss[0])
-        loss_of_l1.append(self.out_loss[0])
+        loss_of_recon.append(self.out_loss[0])
         loss_of_perc.append(self.out_loss[1])
         loss_of_tv.append(self.out_loss[2])
         loss_of_style.append(self.out_loss[3])
@@ -381,7 +413,7 @@ class train_main:
         if step % epochs_to_make_updates == 0 and step != 0:
           # print('list of loss: ',len(loss_of_adv))
           adapt_weights = softadapt_object.get_component_weights(
-                                                                  torch.tensor(loss_of_l1), 
+                                                                  torch.tensor(loss_of_recon), 
                                                                   torch.tensor(loss_of_perc),
                                                                   torch.tensor(loss_of_tv),
                                                                   torch.tensor(loss_of_style),
@@ -389,17 +421,18 @@ class train_main:
                                                                   )
           # Resetting the lists to start fresh (this part is optional)
           # loss_of_adv = []
-          loss_of_l1 = []
+          loss_of_recon = []
           loss_of_perc = []
           loss_of_tv = []
           loss_of_style = []
 
-      self.loss_lambda["LAMBDA_adv"] =  cfg.loss_lambda.LAMBDA_adv
-      self.loss_lambda["LAMBDA_l1"] =  cfg.loss_lambda.LAMBDA_l1
-      self.loss_lambda["LAMBDA_perc"] = adapt_weights[1]
-      self.loss_lambda["LAMBDA_tv"] = adapt_weights[2]
-      self.loss_lambda["LAMBDA_style"] =  adapt_weights[3]
-      for i in tqdm(range(len(self.traingen))):
+      self.loss_lambda_D["LAMBDA_adv"] =  cfg.loss_lambda.D.LAMBDA_adv
+      self.loss_lambda_D["LAMBDA_recon"] =  cfg.loss_lambda.D.LAMBDA_recon
+      self.loss_lambda_D["LAMBDA_perc"] = adapt_weights[1]
+      self.loss_lambda_D["LAMBDA_tv"] = adapt_weights[2]
+      self.loss_lambda_D["LAMBDA_style"] =  adapt_weights[3]
+      # for i in tqdm(range(len(self.traingen))): # training environment
+      for i in tqdm(range(2)): # testing environment
         [masked_images, masks], sample_labels = self.traingen[i]
         input_image = masked_images.astype('float32')
         mask = masks.astype('float32')
@@ -407,41 +440,41 @@ class train_main:
         if(cfg.model == 'p2p'):
           input_image = (input_image - 0.5)/0.5
           target = (target - 0.5)/0.5
-        # NOTE: training env (test in editor server) -----------------
-      self.out_loss = self.train_step(input_image,mask,target, step)
-      # print(out_loss)
-      # if step == 0 and i == len(self.traingen) - 1: # for 1 pic/epoch
-      if step == 0 and i == 0: # for real training
-          if(cfg.ckpt_path != ''):
-            # print sum of initial weights for net
-            print("Init Model Weights:", 
-            sum([x.numpy().sum() for x in self.generator.weights]))
-            print(tf.train.latest_checkpoint(cfg.ckpt_path))
-            self.checkpoint.restore(tf.train.latest_checkpoint(cfg.ckpt_path)).assert_consumed()
-            print("Checkpoint Weights:", 
-            sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
-            # print sum of weights for p2p & checkpoint after attempting to restore saved net 
-            print("Restore Model Weights:", 
-            sum([x.numpy().sum() for x in self.generator.weights]))
-            print("Restored Checkpoint Weights:", 
-            sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
-            print("Done.")
-            # generator.load_weights(cfg.weightG) # 500
-          if(cfg.train_phase == 2 and not(cfg.cont)):
-            self.phase = 2
-        # self.plot_count = self.plot_count + 1
-        # for input_image, mask,target in zip(masked_images, masks, sample_labels):
-          # input_image = tf.expand_dims(input_image, axis=0)
-          # mask = tf.expand_dims(mask, axis=0)
-          # target = tf.expand_dims(target, axis=0)
-          # print(input_image.shape)
+        # NOTE: training env (test in GPU server) -----------------
+        self.out_loss = self.train_step(input_image,mask,target, step)
+        # print(out_loss)
+        # if step == 0 and i == len(self.traingen) - 1: # for 1 pic/epoch
+        if step == 0 and i == 0: # for real training environment
+            if(cfg.ckpt_path != ''):
+              # print sum of initial weights for net
+              print("Init Model Weights:", 
+              sum([x.numpy().sum() for x in self.generator.weights]))
+              print(tf.train.latest_checkpoint(cfg.ckpt_path))
+              self.checkpoint.restore(tf.train.latest_checkpoint(cfg.ckpt_path)).assert_consumed()
+              print("Checkpoint Weights:", 
+              sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
+              # print sum of weights for p2p & checkpoint after attempting to restore saved net 
+              print("Restore Model Weights:", 
+              sum([x.numpy().sum() for x in self.generator.weights]))
+              print("Restored Checkpoint Weights:", 
+              sum([x.numpy().sum() for x in self.checkpoint.generator.weights]))
+              print("Done.")
+              # generator.load_weights(cfg.weightG) # 500
+            if(cfg.train_phase == 2 and not(cfg.cont)):
+              self.phase = 2
+          # self.plot_count = self.plot_count + 1
+          # for input_image, mask,target in zip(masked_images, masks, sample_labels):
+            # input_image = tf.expand_dims(input_image, axis=0)
+            # mask = tf.expand_dims(mask, axis=0)
+            # target = tf.expand_dims(target, axis=0)
+            # print(input_image.shape)
         # NOTE: ------------------------------------------------------------------
       
       if (step) % 1 == 0:
         # display.clear_output(wait=True)
         
         if step != 0:
-          print(f'Time taken for 10 steps: {time.time()-start:.2f} sec | weight: {self.loss_lambda["LAMBDA_adv"]}, {self.loss_lambda["LAMBDA_l1"]}, {self.loss_lambda["LAMBDA_perc"]}, {self.loss_lambda["LAMBDA_tv"]}, {self.loss_lambda["LAMBDA_style"]} ')
+          print(f'Time taken for 10 steps: {time.time()-start:.2f} sec | weight: {self.loss_lambda_D["LAMBDA_adv"]}, {self.loss_lambda_D["LAMBDA_recon"]}, {self.loss_lambda_D["LAMBDA_perc"]}, {self.loss_lambda_D["LAMBDA_tv"]}, {self.loss_lambda_D["LAMBDA_style"]} ')
           
         start = time.time()
 
@@ -455,7 +488,8 @@ class train_main:
         # print(ex_masks)
         # print(ex_sample_labels)
         self.generate_images(ex_masked_images,ex_masks,ex_sample_labels)
-        self.val(step)
+        val_L1, val_L2, val_psnr, val_ssim = self.val(step)
+        loss_history.append(val_L1)
         print(f"Step: {step//1}")
 
       # Training step
@@ -466,12 +500,22 @@ class train_main:
       if self.model_gan_loss < self.best_gan_loss:
         self.best_gan_loss = self.model_gan_loss
         self.save_model('best')
+        self.checkpoint.save(file_prefix=self.checkpoint_prefix)
       # Save (checkpoint) the model every 5k steps
       if (step + 1) % cfg.save == 0:
-        self.checkpoint.save(file_prefix=self.checkpoint_prefix)
+        # self.checkpoint.save(file_prefix=self.checkpoint_prefix)
         self.save_model(str(step))
         # self.save_model(self.generator,self.logs_path,str(step)+'G_weight.h5')
         # self.save_model(self.discriminator,self.logs_path,str(step)+'D_weight.h5')
+
+        if self.early_stopping > 0:
+          if len(loss_history) > self.early_stopping:
+              if loss_history.popleft() < min(loss_history):
+                  self.save_model('final')
+                  self.checkpoint.save(file_prefix=self.checkpoint_prefix)
+                  print(f'\nEarly stopping. No validation loss '
+                        f'improvement in {self.early_stopping} epochs.')
+                  break
 
 
 def main(cfg):
@@ -492,10 +536,10 @@ def main(cfg):
 
     # main_dir = ''
     # list of training dataset
-    # NOTE: val environment (test in editor server) ------------------
-    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/masks.txt'
-    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/input.txt'
-    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/val/output.txt'
+    # NOTE: training environment (train in GPU server) ------------------
+    train_mask_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/masks.txt'
+    train_input_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/input.txt'
+    train_label_dir = main_dir + 'car_ds/train_test_config/'+config_folder+'/train/output.txt'
     # NOTE: -----------------------------------
 
     # list of test dataset
@@ -519,15 +563,17 @@ def main(cfg):
     image_size = (cfg.img_size,cfg.img_size)
     if(cfg.crop_size > 0):
       input_model_size = [cfg.crop_size,cfg.crop_size,3]
+      crop_image_size = (cfg.crop_size,cfg.crop_size)
     else:
       input_model_size = [cfg.img_size,cfg.img_size,3]
+      crop_image_size = (cfg.img_size,cfg.img_size)
 
     if(cfg.inpaint_mode == 'mask'):
       train = Dataset(main_dir = main_dir,input_dir = train_input_dir,mask_dir = train_mask_dir,label_dir = train_label_dir,image_size = image_size)
-      val = Dataset(main_dir = main_dir,input_dir = val_input_dir,mask_dir = val_mask_dir,label_dir = val_label_dir,image_size = image_size)
+      val = Dataset(main_dir = main_dir,input_dir = val_input_dir,mask_dir = val_mask_dir,label_dir = val_label_dir,image_size = crop_image_size)
     if(cfg.inpaint_mode == 'non_mask'):
       train = Dataset(main_dir = main_dir,input_dir = train_input_dir,mask_dir=None,label_dir = train_label_dir,image_size = image_size)
-      val = Dataset(main_dir = main_dir,input_dir = val_input_dir,mask_dir=None,label_dir = val_label_dir,image_size = image_size)
+      val = Dataset(main_dir = main_dir,input_dir = val_input_dir,mask_dir=None,label_dir = val_label_dir,image_size = crop_image_size)
     x_train, y_train, mask_train = train.process_data()
     x_val, y_val, mask_val = val.process_data()
     x_train = train.input_ds
@@ -541,13 +587,19 @@ def main(cfg):
     # mask_test = test.mask_ds
 
     if(cfg.random_car):
-      other_car_mask = prepare_other_car_mask(main_dir,image_size,other_car_list=cfg.other_car_list)
+      other_car_mask = prepare_other_car_mask(main_dir,crop_image_size,other_car_list=cfg.other_car_list)
     else:
       other_car_mask = None
 
     ## Prepare training and testing mask-image pair generator (with discriminator)
-    traingen = createAugment(x_train, y_train, mask_train, batch_size=batch_size, dim=image_size,random_box=cfg.random_box, random_mask=cfg.random_mask, other_car_list=other_car_mask,crop_size=cfg.crop_size)
-    valgen = createAugment(x_val, y_val, mask_val, batch_size=batch_size, dim=image_size,random_box=cfg.random_box, random_mask=cfg.random_mask, other_car_list=other_car_mask,crop_size=cfg.crop_size)
+    traingen = createAugment(x_train, y_train, mask_train, 
+                             batch_size=batch_size, dim=crop_image_size,
+                             random_box=cfg.random_box, random_mask=cfg.random_mask, random_rotate = cfg.random_rotate,
+                             other_car_list=other_car_mask,crop_size=cfg.crop_size, crop_method= cfg.crop_method)
+    valgen = createAugment(x_val, y_val, mask_val, 
+                           batch_size=batch_size, dim=crop_image_size,
+                           random_box=cfg.random_box, random_mask=cfg.random_mask,
+                           other_car_list=other_car_mask)
 
     # testgen = createAugment(x_test, y_test,mask_test,batch_size=8,dim=(128,128), shuffle=False)
 
@@ -562,12 +614,12 @@ def main(cfg):
       # discriminator = Discriminator(input_size=input_model_size)
       # #tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=64)
       # new pconv -------------------------
-      generator = InpaintingModel().build_pconv_unet(input_size=input_model_size,train_bn = cfg.wandb)
+      generator = InpaintingModel().build_pconv_unet(input_size=input_model_size,train_bn = cfg.bn)
       # keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='new_pconv_128.png')
       discriminator = p2pD.Discriminator_con(input_shape=input_model_size)
     elif(cfg.model == 'p2p'):
-      generator = p2pG.dilated_Generator(input_shape=input_model_size)
-      # keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='p2p_G_256.png')
+      generator = p2pG.dilated_Generator(input_shape=input_model_size,neck=cfg.neck)
+      # tf.keras.utils.plot_model(generator, show_shapes=True, dpi=60, to_file='p2p_G_256.png')
       discriminator = p2pD.dilated_Discriminator(input_shape=input_model_size)
       # tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=64, to_file='p2p_D_256.png')
 
@@ -586,7 +638,10 @@ def main(cfg):
 
     summary_writer = tf.summary.create_file_writer(log_dir + "fit/" + time_now)
 
-    checkpoint_dir = log_dir + "fit/" + time_now +'/training_checkpoints'
+    if(cfg.wandb):
+      checkpoint_dir = log_path
+    else:
+      checkpoint_dir = log_dir + "fit/" + time_now +'/training_checkpoints'
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
     
     # if(bool(strtobool(cfg.wandb))):
@@ -606,13 +661,13 @@ def main(cfg):
       train_main(traingen,valgen,generator,generator_optimizer,discriminator,discriminator_optimizer,
                    example_masked_images,example_masks,example_sample_labels,
                    checkpoint,checkpoint_prefix,summary_writer,logs= log_path,
-                   steps=cfg.step,
+                   steps=cfg.step,early_stopping=cfg.early_stopping, recon_loss=cfg.recon_loss
                    )
     else:
       train_main(traingen,valgen,generator,generator_optimizer,discriminator,discriminator_optimizer,
                    example_masked_images,example_masks,example_sample_labels,
                    checkpoint,checkpoint_prefix,summary_writer,logs= checkpoint_dir,
-                   steps=cfg.step)
+                   steps=cfg.step,early_stopping=cfg.early_stopping, recon_loss=cfg.recon_loss)
     
 if __name__ == '__main__':
     main(cfg)
