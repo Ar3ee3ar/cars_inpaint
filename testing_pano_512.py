@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from distutils.util import strtobool
 from PIL import Image
 import time
+import glob
 
 from dataset import Dataset, createAugment
 # from config_test import cfg_test
@@ -107,6 +108,12 @@ def main(cfg_test):
        
     create_fol(main_dir+"test_img/"+name_folder)
     create_fol(main_dir+"test_img/"+name_folder+"/"+cfg_test.save_fol+"/"+cfg_test.ds_name)
+
+    if(cfg_test.ds_name == "upload"):
+      count_list = glob.glob(count_list+'/*'+'.jpg')
+        # img_path = str(count_num)
+        # count_num = (img_path.split('/')[-1]).split('.')[0]
+        # coor["x"] = 27
     
     for count_num in count_list:
       if(cfg_test.ds_name == "bridge"):

@@ -10,7 +10,7 @@ config = {
     "random_mask": False,
     "save": True,
     "save_fol": "test_show",
-    "img": ["/content/cars_inpaint/upload_img_colab/img_000700.jpg"],
+    "img": ["/content/cars_inpaint/upload_img_colab"],
     "pic_4x" : ""
     }
 
